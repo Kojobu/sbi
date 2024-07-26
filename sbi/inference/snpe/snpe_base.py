@@ -388,7 +388,7 @@ class PosteriorEstimator(NeuralInference, ABC):
                         force_first_round_loss=force_first_round_loss,
                     )
                     train_loss = torch.mean(train_losses)
-                    temp_loss_de.append(train_losses.item())
+                    temp_loss_de.append(train_loss.item())
 
                     train_loss.backward()
                     if clip_max_norm is not None:
