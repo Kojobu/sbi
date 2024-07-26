@@ -21,6 +21,8 @@ from sbi.neural_nets.density_estimators.shape_handling import (
 )
 from sbi.utils import check_estimator_arg, check_prior, x_shape_from_simulation
 
+from alive_progress import alive_bar
+import numpy as np
 
 class LikelihoodEstimator(NeuralInference, ABC):
     def __init__(
@@ -117,17 +119,18 @@ class LikelihoodEstimator(NeuralInference, ABC):
 
     def train(
         self,
-        training_batch_size: int = 50,
-        learning_rate: float = 5e-4,
-        validation_fraction: float = 0.1,
+        train_dataloader,
+        test_dataloader,
+        optimizer,
+        optimizer_parameter,
+        summary_net = None,
+        loss_summary_net = None,
+        train_summary_net_freezed_rounds = 0,
+        #pretrain_summary_net = False,
         stop_after_epochs: int = 20,
         max_num_epochs: int = 2**31 - 1,
         clip_max_norm: Optional[float] = 5.0,
-        resume_training: bool = False,
-        discard_prior_samples: bool = False,
         retrain_from_scratch: bool = False,
-        show_train_summary: bool = False,
-        dataloader_kwargs: Optional[Dict] = None,
     ) -> ConditionalDensityEstimator:
         r"""Train the density estimator to learn the distribution $p(x|\theta)$.
 
@@ -151,16 +154,15 @@ class LikelihoodEstimator(NeuralInference, ABC):
         """
         # Load data from most recent round.
         self._round = max(self._data_round_index)
-        # Starting index for the training set (1 = discard round-0 samples).
-        start_idx = int(discard_prior_samples and self._round > 0)
 
-        train_loader, val_loader = self.get_dataloaders(
-            start_idx,
-            training_batch_size,
-            validation_fraction,
-            resume_training,
-            dataloader_kwargs=dataloader_kwargs,
-        )
+        train_loader, val_loader = train_dataloader, test_dataloader
+        
+        if summary_net is not None:
+            self.sum_net = True
+        else:
+            self.sum_net = False    
+            
+        self.epoch = 0
 
         # First round or if retraining from scratch:
         # Call the `self._build_neural_net` with the rounds' thetas and xs as
@@ -169,8 +171,17 @@ class LikelihoodEstimator(NeuralInference, ABC):
         # can `sample()` and `log_prob()`. The network is accessible via `.net`.
         if self._neural_net is None or retrain_from_scratch:
             # Get theta,x to initialize NN
-            theta, x, _ = self.get_simulations(starting_round=start_idx)
+            theta, x, _ = train_loader.dataset[0]
+            theta, x = theta.unsqueeze(0), x.unsqueeze(0)
             # Use only training data for building the neural net (z-scoring transforms)
+            if self.sum_net:
+                x = summary_net.to('cpu')(x)
+                
+                
+            self._neural_net = self._build_neural_net(
+                theta[self.train_indices].to("cpu"),
+                x[self.train_indices].to("cpu"),
+            )
             self._neural_net = self._build_neural_net(
                 theta[self.train_indices].to("cpu"),
                 x[self.train_indices].to("cpu"),
@@ -181,85 +192,141 @@ class LikelihoodEstimator(NeuralInference, ABC):
             del theta, x
 
         self._neural_net.to(self._device)
-        if not resume_training:
-            self.optimizer = optim.Adam(
-                list(self._neural_net.parameters()),
-                lr=learning_rate,
-            )
-            self.epoch, self._val_log_prob = 0, float("-Inf")
-
-        while self.epoch <= max_num_epochs and not self._converged(
-            self.epoch, stop_after_epochs
-        ):
-            # Train for a single epoch.
-            self._neural_net.train()
-            train_log_probs_sum = 0
-            for batch in train_loader:
-                self.optimizer.zero_grad()
-                theta_batch, x_batch = (
-                    batch[0].to(self._device),
-                    batch[1].to(self._device),
-                )
-                # Evaluate on x with theta as context.
-                train_losses = self._loss(theta=theta_batch, x=x_batch)
-                train_loss = torch.mean(train_losses)
-                train_log_probs_sum -= train_losses.sum().item()
-
-                train_loss.backward()
-                if clip_max_norm is not None:
-                    clip_grad_norm_(
-                        self._neural_net.parameters(),
-                        max_norm=clip_max_norm,
-                    )
-                self.optimizer.step()
-
-            self.epoch += 1
-
-            train_log_prob_average = train_log_probs_sum / (
-                len(train_loader) * train_loader.batch_size  # type: ignore
-            )
-            self._summary["training_log_probs"].append(train_log_prob_average)
-
-            # Calculate validation performance.
-            self._neural_net.eval()
-            val_log_prob_sum = 0
-            with torch.no_grad():
-                for batch in val_loader:
+        summary_net.to(self._device)    
+        
+        if self.sum_net:
+            #self.optimizer_le = optimizer(self._neural_net.parameters(), **optimizer_parameter)
+            #self.optimizer_sn = optimizer(summary_net.parameters(), **optimizer_parameter)
+            self.optimizer = optimizer( list(summary_net.parameters()) + list(self._neural_net.parameters()), **optimizer_parameter)
+        else:
+            self.optimizer = optimizer(self._neural_net.parameters(), **optimizer_parameter)
+        
+        if loss_summary_net is None:
+            loss_summary_net = torch.nn.MSELoss()
+        
+        train_loss_summary_net = []
+        train_loss_density_net = []
+        test_loss_summary_net = []
+        test_loss_density_net = []
+        
+        with alive_bar(max_num_epochs, force_tty=True) as bar:
+            while self.epoch <= max_num_epochs and not self._converged(
+                self.epoch, stop_after_epochs
+            ):
+                # Train for a single epoch.
+                self._neural_net.train()
+                if self.sum_net:
+                    summary_net.train()
+                    
+                temp_loss_sum = []
+                temp_loss_de = []
+                
+                for batch in train_loader:
+                    self.optimizer.zero_grad()
                     theta_batch, x_batch = (
                         batch[0].to(self._device),
                         batch[1].to(self._device),
                     )
+                    
+                    # trainingsloop with summary-net freezed
+                    if self.epoch < train_summary_net_freezed_rounds and self.sum_net:
+                        x_batch = summary_net(x_batch).detach()
+                    else:
+                        x_batch = summary_net(x_batch)
+                        
+                    # Calculate loss.
+                    temp_loss_sum.append(loss_summary_net(x_batch, theta_batch).mean().item())
+                    
                     # Evaluate on x with theta as context.
-                    val_losses = self._loss(theta=theta_batch, x=x_batch)
-                    val_log_prob_sum -= val_losses.sum().item()
+                    if self.epoch >= train_summary_net_freezed_rounds and self.sum_net:
+                        '''
+                        Now: 
+                        pretrain: self._loss(theta=theta_batch, x=x_batch)
+                        then: self._loss(theta=x_batch, x=theta_batch)
+                        does not work well, convergence but biased with large variance
+                        
+                        Next: 
+                        pretrain:
+                        self._loss(theta=theta_batch, x=x_batch)
+                        then: (self._loss(theta=theta_batch, x=x_batch) + self._loss(theta=x_batch, x=theta_batch))*0.5
+                        sharp distribution, slightly biased, but works well
+                        
+                        Next:
+                        pretrain: train_loss = self._loss(theta=theta_batch, x=x_batch)
+                        then: de: train_loss = self._loss(theta=theta_batch, x=x_batch) sn: train_loss = self._loss(theta=x_batch, x=theta_batch)
+                        
+                        Next:
+                        pretrain: train_loss = self._loss(theta=theta_batch, x=x_batch)
+                        then: de: train_loss = self._loss(theta=theta_batch, x=x_batch) sn: summary_net_loss = loss_summary_net(x_batch, samples)
+                        '''
+                        train_loss = (self._loss(theta=theta_batch, x=x_batch) + self._loss(theta=x_batch, x=theta_batch))*0.5
+                    else:
+                        train_loss = self._loss(theta=theta_batch, x=x_batch)
+                    
+                    train_loss = torch.mean(train_loss)
+                    temp_loss_de.append(train_loss.item())
 
-            # Take mean over all validation samples.
-            self._val_log_prob = val_log_prob_sum / (
-                len(val_loader) * val_loader.batch_size  # type: ignore
-            )
-            # Log validation log prob for every epoch.
-            self._summary["validation_log_probs"].append(self._val_log_prob)
+                    train_loss.backward()
+                    if clip_max_norm is not None:
+                        clip_grad_norm_(
+                            self._neural_net.parameters(),
+                            max_norm=clip_max_norm,
+                        )
+                        if self.sum_net:
+                            clip_grad_norm_(
+                                summary_net.parameters(),
+                                max_norm=clip_max_norm,
+                            )
+                    self.optimizer.step()
 
-            self._maybe_show_progress(self._show_progress_bars, self.epoch)
+
+                train_loss_summary_net.append(np.mean(temp_loss_sum))
+                train_loss_density_net.append(np.mean(temp_loss_de))    
+
+                # Calculate validation performance.
+                self._neural_net.eval()
+                summary_net.eval()
+                with torch.no_grad():
+                    
+                    temp_loss_sum = []
+                    temp_loss_de = []
+                    test_blub = []
+                    
+                    
+                    for batch in val_loader:
+                        theta_batch, x_batch = (
+                            batch[0].to(self._device),
+                            batch[1].to(self._device),
+                        )
+                        
+                        # trainingsloop with summary-net freezed
+                        if self.sum_net:
+                            x_batch = summary_net(x_batch)
+                            
+                        # Calculate loss.
+                        temp_loss_sum.append(loss_summary_net(x_batch, theta_batch).mean().item())
+                        
+                        # Evaluate on x with theta as context.
+                        if self.epoch >= train_summary_net_freezed_rounds and self.sum_net:    
+                            val_losses = train_loss = (self._loss(theta=theta_batch, x=x_batch) + self._loss(theta=x_batch, x=theta_batch))*0.5
+                        else:
+                            val_losses = self._loss(theta=theta_batch, x=x_batch)
+                            test_blub.append(0)
+                        temp_loss_de.append(val_losses.mean().item())
+
+                test_loss_summary_net.append(np.mean(temp_loss_sum))
+                test_loss_density_net.append(np.mean(temp_loss_de))  
+                print(f"{test_loss_density_net[-1]=}", f"{test_loss_summary_net[-1]=}", f'{np.mean(test_blub)=}')
+                self.epoch += 1
+                bar()
 
         self._report_convergence_at_end(self.epoch, stop_after_epochs, max_num_epochs)
-
-        # Update summary.
-        self._summary["epochs_trained"].append(self.epoch)
-        self._summary["best_validation_log_prob"].append(self._best_val_log_prob)
-
-        # Update TensorBoard and summary dict.
-        self._summarize(round_=self._round)
-
-        # Update description for progress bar.
-        if show_train_summary:
-            print(self._describe_round(self._round, self._summary))
 
         # Avoid keeping the gradients in the resulting network, which can
         # cause memory leakage when benchmarking.
         self._neural_net.zero_grad(set_to_none=True)
 
-        return deepcopy(self._neural_net)
+        return self._neural_net, summary_net, (train_loss_summary_net, train_loss_density_net, test_loss_summary_net, test_loss_density_net)
 
     def build_posterior(
         self,

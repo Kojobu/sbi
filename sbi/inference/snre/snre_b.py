@@ -52,18 +52,17 @@ class SNRE_B(RatioEstimator):
 
     def train(
         self,
+        train_dataloader,
+        test_dataloader,
+        optimizer,
+        optimizer_parameter,
+        summary_net = None,
+        loss_summary_net = None,
+        train_summary_net_freezed_rounds = 0,
         num_atoms: int = 10,
-        training_batch_size: int = 50,
-        learning_rate: float = 5e-4,
-        validation_fraction: float = 0.1,
         stop_after_epochs: int = 20,
         max_num_epochs: int = 2**31 - 1,
         clip_max_norm: Optional[float] = 5.0,
-        resume_training: bool = False,
-        discard_prior_samples: bool = False,
-        retrain_from_scratch: bool = False,
-        show_train_summary: bool = False,
-        dataloader_kwargs: Optional[Dict] = None,
     ) -> nn.Module:
         r"""Return classifier that approximates the ratio $p(\theta,x)/p(\theta)p(x)$.
 

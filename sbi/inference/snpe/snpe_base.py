@@ -40,6 +40,8 @@ from sbi.utils import (
     warn_if_zscoring_changes_data,
 )
 from sbi.utils.sbiutils import ImproperEmpirical, mask_sims_from_prior
+from alive_progress import alive_bar
+import numpy as np
 
 
 class PosteriorEstimator(NeuralInference, ABC):
@@ -208,19 +210,20 @@ class PosteriorEstimator(NeuralInference, ABC):
 
     def train(
         self,
-        training_batch_size: int = 50,
-        learning_rate: float = 5e-4,
-        validation_fraction: float = 0.1,
+        train_dataloader,
+        test_dataloader,
+        optimizer,
+        optimizer_parameter,
+        summary_net = None,
+        loss_summary_net = None,
+        train_summary_net_freezed_rounds = 0,
+        #pretrain_summary_net = False,
         stop_after_epochs: int = 20,
         max_num_epochs: int = 2**31 - 1,
         clip_max_norm: Optional[float] = 5.0,
         calibration_kernel: Optional[Callable] = None,
-        resume_training: bool = False,
         force_first_round_loss: bool = False,
-        discard_prior_samples: bool = False,
         retrain_from_scratch: bool = False,
-        show_train_summary: bool = False,
-        dataloader_kwargs: Optional[dict] = None,
     ) -> ConditionalDensityEstimator:
         r"""Return density estimator that approximates the distribution $p(\theta|x)$.
 
@@ -284,29 +287,20 @@ class PosteriorEstimator(NeuralInference, ABC):
 
             calibration_kernel = default_calibration_kernel
 
-        # Starting index for the training set (1 = discard round-0 samples).
-        start_idx = int(discard_prior_samples and self._round > 0)
-
-        # For non-atomic loss, we can not reuse samples from previous rounds as of now.
-        # SNPE-A can, by construction of the algorithm, only use samples from the last
-        # round. SNPE-A is the only algorithm that has an attribute `_ran_final_round`,
-        # so this is how we check for whether or not we are using SNPE-A.
-        if self.use_non_atomic_loss or hasattr(self, "_ran_final_round"):
-            start_idx = self._round
-
         # Set the proposal to the last proposal that was passed by the user. For
         # atomic SNPE, it does not matter what the proposal is. For non-atomic
         # SNPE, we only use the latest data that was passed, i.e. the one from the
         # last proposal.
         proposal = self._proposal_roundwise[-1]
 
-        train_loader, val_loader = self.get_dataloaders(
-            start_idx,
-            training_batch_size,
-            validation_fraction,
-            resume_training,
-            dataloader_kwargs=dataloader_kwargs,
-        )
+        train_loader, val_loader = train_dataloader, test_dataloader
+        
+        if summary_net is not None:
+            self.sum_net = True
+        else:
+            self.sum_net = False    
+            
+            
         # First round or if retraining from scratch:
         # Call the `self._build_neural_net` with the rounds' thetas and xs as
         # arguments, which will build the neural network.
@@ -314,9 +308,13 @@ class PosteriorEstimator(NeuralInference, ABC):
         # can `sample()` and `log_prob()`. The network is accessible via `.net`.
         if self._neural_net is None or retrain_from_scratch:
             # Get theta,x to initialize NN
-            theta, x, _ = self.get_simulations(starting_round=start_idx)
+            theta, x, _ = train_loader.dataset[0]
+            theta, x = theta.unsqueeze(0), x.unsqueeze(0)
             # Use only training data for building the neural net (z-scoring transforms)
-
+            if self.sum_net:
+                x = summary_net.to('cpu')(x)
+                
+                
             self._neural_net = self._build_neural_net(
                 theta[self.train_indices].to("cpu"),
                 x[self.train_indices].to("cpu"),
@@ -326,73 +324,62 @@ class PosteriorEstimator(NeuralInference, ABC):
                 theta.to("cpu"), self._neural_net.input_shape
             )
             x = reshape_to_batch_event(x.to("cpu"), self._neural_net.condition_shape)
-            test_posterior_net_for_multi_d_x(self._neural_net, theta, x)
+            #test_posterior_net_for_multi_d_x(self._neural_net, theta, x)
 
             del theta, x
+        
+        if self.sum_net:
+            self.optimizer = optimizer( list(summary_net.parameters()) + list(self._neural_net.parameters()), **optimizer_parameter)
+        else:
+            self.optimizer = optimizer(self._neural_net.parameters(), **optimizer_parameter)
+        
 
         # Move entire net to device for training.
         self._neural_net.to(self._device)
+        summary_net.to(self._device)
+        
+        if loss_summary_net is None:
+            loss_summary_net = torch.nn.MSELoss()
 
-        if not resume_training:
-            self.optimizer = optim.Adam(
-                list(self._neural_net.parameters()), lr=learning_rate
-            )
-            self.epoch, self._val_log_prob = 0, float("-Inf")
+        train_loss_summary_net = []
+        train_loss_density_net = []
+        test_loss_summary_net = []
+        test_loss_density_net = []
+        self.epoch = 0
+        
+        with alive_bar(max_num_epochs, force_tty=True) as bar:
+            while self.epoch <= max_num_epochs and not self._converged(
+                self.epoch, stop_after_epochs
+            ):
+                # Train for a single epoch.
+                self._neural_net.train()
+                if self.sum_net:
+                    summary_net.train()
+                    
+                temp_loss_sum = []
+                temp_loss_de = []
 
-        while self.epoch <= max_num_epochs and not self._converged(
-            self.epoch, stop_after_epochs
-        ):
-            # Train for a single epoch.
-            self._neural_net.train()
-            train_log_probs_sum = 0
-            epoch_start_time = time.time()
-            for batch in train_loader:
-                self.optimizer.zero_grad()
-                # Get batches on current device.
-                theta_batch, x_batch, masks_batch = (
-                    batch[0].to(self._device),
-                    batch[1].to(self._device),
-                    batch[2].to(self._device),
-                )
-
-                train_losses = self._loss(
-                    theta_batch,
-                    x_batch,
-                    masks_batch,
-                    proposal,
-                    calibration_kernel,
-                    force_first_round_loss=force_first_round_loss,
-                )
-                train_loss = torch.mean(train_losses)
-                train_log_probs_sum -= train_losses.sum().item()
-
-                train_loss.backward()
-                if clip_max_norm is not None:
-                    clip_grad_norm_(
-                        self._neural_net.parameters(), max_norm=clip_max_norm
-                    )
-                self.optimizer.step()
-
-            self.epoch += 1
-
-            train_log_prob_average = train_log_probs_sum / (
-                len(train_loader) * train_loader.batch_size  # type: ignore
-            )
-            self._summary["training_log_probs"].append(train_log_prob_average)
-
-            # Calculate validation performance.
-            self._neural_net.eval()
-            val_log_prob_sum = 0
-
-            with torch.no_grad():
-                for batch in val_loader:
+                for batch in train_loader:
+                    self.optimizer.zero_grad()
+                    # Get batches on current device.
                     theta_batch, x_batch, masks_batch = (
                         batch[0].to(self._device),
                         batch[1].to(self._device),
                         batch[2].to(self._device),
                     )
-                    # Take negative loss here to get validation log_prob.
-                    val_losses = self._loss(
+                    
+                    # trainingsloop with summary-net freezed
+                    if self.epoch < train_summary_net_freezed_rounds and self.sum_net:
+                        x_batch = summary_net(x_batch).detach()
+                        
+                    else:
+                        x_batch = summary_net(x_batch)
+                        
+                    # Calculate loss.
+                    temp_loss_sum.append(loss_summary_net(x_batch, theta_batch).mean().item())
+
+
+                    train_losses = self._loss(
                         theta_batch,
                         x_batch,
                         masks_batch,
@@ -400,36 +387,77 @@ class PosteriorEstimator(NeuralInference, ABC):
                         calibration_kernel,
                         force_first_round_loss=force_first_round_loss,
                     )
-                    val_log_prob_sum -= val_losses.sum().item()
+                    train_loss = torch.mean(train_losses)
+                    temp_loss_de.append(train_losses.item())
 
-            # Take mean over all validation samples.
-            self._val_log_prob = val_log_prob_sum / (
-                len(val_loader) * val_loader.batch_size  # type: ignore
-            )
-            # Log validation log prob for every epoch.
-            self._summary["validation_log_probs"].append(self._val_log_prob)
-            self._summary["epoch_durations_sec"].append(time.time() - epoch_start_time)
+                    train_loss.backward()
+                    if clip_max_norm is not None:
+                        clip_grad_norm_(
+                            self._neural_net.parameters(), max_norm=clip_max_norm
+                        )
+                        if self.sum_net:
+                            clip_grad_norm_(
+                                summary_net.parameters(),
+                                max_norm=clip_max_norm,
+                            )
+                    self.optimizer.step()
 
-            self._maybe_show_progress(self._show_progress_bars, self.epoch)
+                self.epoch += 1
+
+                train_loss_summary_net.append(np.mean(temp_loss_sum))
+                train_loss_density_net.append(np.mean(temp_loss_de))    
+
+                # Calculate validation performance.
+                self._neural_net.eval()
+                if self.sum_net:
+                    summary_net.eval()
+                
+                temp_loss_sum = []
+                temp_loss_de = []
+
+                with torch.no_grad():
+                    for batch in val_loader:
+                        
+                        theta_batch, x_batch, masks_batch = (
+                            batch[0].to(self._device),
+                            batch[1].to(self._device),
+                            batch[2].to(self._device),
+                        )
+                        
+                        # trainingsloop with summary-net freezed
+                        if self.sum_net:
+                            x_batch = summary_net(x_batch)
+                            
+                            
+                        # Calculate loss.
+                        temp_loss_sum.append(loss_summary_net(x_batch, theta_batch).mean().item())
+                        
+                        
+                        # Take negative loss here to get validation log_prob.
+                        val_losses = self._loss(
+                            theta_batch,
+                            x_batch,
+                            masks_batch,
+                            proposal,
+                            calibration_kernel,
+                            force_first_round_loss=force_first_round_loss,
+                        )
+                        temp_loss_de.append(val_losses.mean().item())
+
+                test_loss_summary_net.append(np.mean(temp_loss_sum))
+                test_loss_density_net.append(np.mean(temp_loss_de))  
+                print(f"{test_loss_density_net[-1]=}", f"{test_loss_summary_net[-1]=}")
+                bar()
+                
 
         self._report_convergence_at_end(self.epoch, stop_after_epochs, max_num_epochs)
 
-        # Update summary.
-        self._summary["epochs_trained"].append(self.epoch)
-        self._summary["best_validation_log_prob"].append(self._best_val_log_prob)
-
-        # Update tensorboard and summary dict.
-        self._summarize(round_=self._round)
-
-        # Update description for progress bar.
-        if show_train_summary:
-            print(self._describe_round(self._round, self._summary))
 
         # Avoid keeping the gradients in the resulting network, which can
         # cause memory leakage when benchmarking.
         self._neural_net.zero_grad(set_to_none=True)
 
-        return deepcopy(self._neural_net)
+        return self._neural_net, summary_net, (train_loss_summary_net, train_loss_density_net, test_loss_summary_net, test_loss_density_net)
 
     def build_posterior(
         self,

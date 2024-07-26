@@ -92,7 +92,7 @@ def run_sbc(
             sbc_outputs: Sequence[Tuple[Tensor, Tensor]]
             sbc_outputs = Parallel(n_jobs=num_workers)(  # pyright: ignore[reportAssignmentType]
                 delayed(sbc_on_batch)(
-                    thetas_batch, xs_batch, posterior, num_posterior_samples
+                    thetas_batch, xs_batch, posterior, num_posterior_samples, reduce_fns
                 )
                 for thetas_batch, xs_batch in zip(thetas_batches, xs_batches)
             )
