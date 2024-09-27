@@ -1,48 +1,49 @@
 # Inference
 
-## Training algorithms
+## Helpers
 
-::: sbi.inference.trainers.npe.npe_a.NPE_A
+::: sbi.inference.base.infer
+
+::: sbi.inference.base.simulate_for_sbi
+
+::: sbi.utils.user_input_checks.process_prior
+
+::: sbi.utils.user_input_checks.process_simulator
+
+
+## Algorithms
+
+::: sbi.inference.snpe.snpe_a.SNPE_A
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
 
-::: sbi.inference.trainers.npe.npe_c.NPE_C
+::: sbi.inference.snpe.snpe_c.SNPE_C
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
 
-::: sbi.inference.trainers.fmpe.fmpe.FMPE
+::: sbi.inference.snle.snle_a.SNLE_A
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
 
-::: sbi.inference.trainers.npse.npse.NPSE
+::: sbi.inference.snre.snre_a.SNRE_A
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
 
-::: sbi.inference.trainers.nle.nle_a.NLE_A
+::: sbi.inference.snre.snre_b.SNRE_B
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
 
-::: sbi.inference.trainers.nre.nre_a.NRE_A
+::: sbi.inference.snre.snre_c.SNRE_C
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
 
-::: sbi.inference.trainers.nre.nre_b.NRE_B
-    selection:
-      filters: [ "!^_", "^__", "!^__class__" ]
-      inherited_members: true
-
-::: sbi.inference.trainers.nre.nre_c.NRE_C
-    selection:
-      filters: [ "!^_", "^__", "!^__class__" ]
-      inherited_members: true
-
-::: sbi.inference.trainers.nre.bnre.BNRE
+::: sbi.inference.snre.bnre.BNRE
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
@@ -56,11 +57,3 @@
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
-
-## Helpers
-
-::: sbi.inference.trainers.base.simulate_for_sbi
-
-::: sbi.utils.user_input_checks.process_prior
-
-::: sbi.utils.user_input_checks.process_simulator

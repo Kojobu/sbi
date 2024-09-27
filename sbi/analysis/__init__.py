@@ -11,7 +11,6 @@ from sbi.analysis.plot import (
     marginal_plot,
     marginal_plot_with_probs_intensity,
     pairplot,
-    plot_tarp,
     pp_plot,
     pp_plot_lc2st,
     sbc_rank_plot,

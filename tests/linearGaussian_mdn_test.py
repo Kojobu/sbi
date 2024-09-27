@@ -9,21 +9,23 @@ from torch import Tensor, eye, ones, zeros
 from torch.distributions import MultivariateNormal, Uniform
 
 from sbi.inference import (
-    NLE,
-    NPE,
+    SNLE,
+    SNPE,
     DirectPosterior,
     MCMCPosterior,
     likelihood_estimator_based_potential,
+    simulate_for_sbi,
 )
 from sbi.simulators.linear_gaussian import (
     linear_gaussian,
     true_posterior_linear_gaussian_mvn_prior,
 )
+from sbi.utils.user_input_checks import process_prior, process_simulator
 from tests.test_utils import check_c2st
 
 
 @pytest.mark.parametrize(
-    "method", (NPE, pytest.param(NLE, marks=[pytest.mark.slow, pytest.mark.mcmc]))
+    "method", (SNPE, pytest.param(SNLE, marks=[pytest.mark.slow, pytest.mark.mcmc]))
 )
 def test_mdn_inference_with_different_methods(method, mcmc_params_accurate: dict):
     num_dim = 2
@@ -48,11 +50,11 @@ def test_mdn_inference_with_different_methods(method, mcmc_params_accurate: dict
 
     inference = method(density_estimator="mdn")
 
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
-
+    prior, _, prior_returns_numpy = process_prior(prior)
+    simulator = process_simulator(simulator, prior, prior_returns_numpy)
+    theta, x = simulate_for_sbi(simulator, prior, num_simulations)
     estimator = inference.append_simulations(theta, x).train()
-    if method == NPE:
+    if method == SNPE:
         posterior = DirectPosterior(posterior_estimator=estimator, prior=prior)
     else:
         potential_fn, theta_transform = likelihood_estimator_based_potential(
@@ -82,7 +84,6 @@ def test_mdn_with_1D_uniform_prior():
     """
     num_dim = 1
     x_o = torch.tensor([[1.0]])
-    num_simulations = 100
     num_samples = 100
 
     # likelihood_mean will be likelihood_shift+theta
@@ -94,11 +95,11 @@ def test_mdn_with_1D_uniform_prior():
     def simulator(theta: Tensor) -> Tensor:
         return linear_gaussian(theta, likelihood_shift, likelihood_cov)
 
-    inference = NPE(density_estimator="mdn")
+    inference = SNPE(density_estimator="mdn")
 
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
-
+    prior, _, prior_returns_numpy = process_prior(prior)
+    simulator = process_simulator(simulator, prior, prior_returns_numpy)
+    theta, x = simulate_for_sbi(simulator, prior, 100)
     posterior_estimator = inference.append_simulations(theta, x).train()
     posterior = DirectPosterior(posterior_estimator=posterior_estimator, prior=prior)
     samples = posterior.sample((num_samples,), x=x_o)

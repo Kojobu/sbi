@@ -8,10 +8,9 @@ from warnings import warn
 
 import torch
 from pyknos.nflows.nn import nets
-from torch import Tensor, nn, relu
+from torch import Tensor, nn, optim, relu
 from torch.nn import MSELoss
 from torch.nn.utils.clip_grad import clip_grad_norm_
-from torch.optim.adam import Adam
 from torch.utils import data
 from torch.utils.data.sampler import SubsetRandomSampler
 
@@ -228,7 +227,7 @@ class ActiveSubspace:
 
     def train(
         self,
-        training_batch_size: int = 200,
+        training_batch_size: int = 50,
         learning_rate: float = 5e-4,
         validation_fraction: float = 0.1,
         stop_after_epochs: int = 20,
@@ -287,7 +286,7 @@ class ActiveSubspace:
                 self._device
             )
 
-        optimizer = Adam(
+        optimizer = optim.Adam(
             list(self._regression_net.parameters()),
             lr=learning_rate,
         )

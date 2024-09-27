@@ -10,9 +10,10 @@ from torch import eye, ones, zeros
 from torch.distributions import Uniform
 
 from sbi.inference import (
-    NLE,
+    SNLE,
     MCMCPosterior,
     likelihood_estimator_based_potential,
+    simulate_for_sbi,
 )
 from sbi.neural_nets import likelihood_nn
 from sbi.samplers.mcmc.pymc_wrapper import PyMCSampler
@@ -25,7 +26,7 @@ from sbi.simulators.linear_gaussian import (
     diagonal_linear_gaussian,
     true_posterior_linear_gaussian_mvn_prior,
 )
-from sbi.utils.user_input_checks import process_prior
+from sbi.utils.user_input_checks import process_prior, process_simulator
 from tests.test_utils import check_c2st
 
 
@@ -203,10 +204,13 @@ def test_getting_inference_diagnostics(method, mcmc_params_fast: dict):
 
     simulator = diagonal_linear_gaussian
     density_estimator = likelihood_nn("maf", num_transforms=3)
-    inference = NLE(density_estimator=density_estimator, show_progress_bars=False)
-    prior, *_ = process_prior(prior)
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
+    inference = SNLE(density_estimator=density_estimator, show_progress_bars=False)
+    prior, _, prior_returns_numpy = process_prior(prior)
+    simulator = process_simulator(simulator, prior, prior_returns_numpy)
+
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations, simulation_batch_size=num_simulations
+    )
     likelihood_estimator = inference.append_simulations(theta, x).train(
         training_batch_size=num_simulations, max_num_epochs=2
     )

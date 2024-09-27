@@ -12,6 +12,7 @@ recursive-include docs *.svg
 recursive-include docs *.yml
 recursive-include docs *.py
 
+recursive-include examples *.py
 recursive-include sbi *.md
 recursive-include tests *.md
 recursive-include tests *.py

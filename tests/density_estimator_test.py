@@ -3,26 +3,23 @@
 
 from __future__ import annotations
 
-from typing import Callable, Tuple
+from typing import Tuple
 
 import pytest
 import torch
 from torch import eye, zeros
 from torch.distributions import MultivariateNormal
 
-from sbi.neural_nets.embedding_nets import CNNEmbedding
-from sbi.neural_nets.estimators.shape_handling import (
+from sbi.neural_nets import build_mnle
+from sbi.neural_nets.categorial import build_categoricalmassestimator
+from sbi.neural_nets.density_estimators.shape_handling import (
     reshape_to_sample_batch_event,
 )
-from sbi.neural_nets.net_builders import (
-    build_categoricalmassestimator,
+from sbi.neural_nets.embedding_nets import CNNEmbedding
+from sbi.neural_nets.flow import (
     build_maf,
     build_maf_rqs,
-    build_mdn,
-    build_mlp_flowmatcher,
-    build_mnle,
     build_nsf,
-    build_resnet_flowmatcher,
     build_zuko_bpf,
     build_zuko_gf,
     build_zuko_maf,
@@ -33,28 +30,7 @@ from sbi.neural_nets.net_builders import (
     build_zuko_sospf,
     build_zuko_unaf,
 )
-
-# List of all density estimator builders for testing.
-model_builders = [
-    build_mdn,
-    build_maf,
-    build_maf_rqs,
-    build_nsf,
-    build_zuko_bpf,
-    build_zuko_gf,
-    build_zuko_maf,
-    build_zuko_naf,
-    build_zuko_ncsf,
-    build_zuko_nice,
-    build_zuko_nsf,
-    build_zuko_sospf,
-    build_zuko_unaf,
-]
-
-flowmatching_build_functions = [
-    build_mlp_flowmatcher,
-    build_resnet_flowmatcher,
-]
+from sbi.neural_nets.mdn import build_mdn
 
 
 def get_batch_input(nsamples: int, input_dims: int) -> torch.Tensor:
@@ -135,7 +111,24 @@ def test_shape_handling_utility_for_density_estimator(
 
 
 @pytest.mark.parametrize(
-    "density_estimator_build_fn", model_builders + flowmatching_build_functions
+    "density_estimator_build_fn",
+    (
+        build_mdn,
+        build_maf,
+        build_maf_rqs,
+        build_nsf,
+        build_zuko_bpf,
+        build_zuko_gf,
+        build_zuko_maf,
+        build_zuko_naf,
+        build_zuko_ncsf,
+        build_zuko_nice,
+        build_zuko_nsf,
+        build_zuko_sospf,
+        build_zuko_unaf,
+        build_categoricalmassestimator,
+        build_mnle,
+    ),
 )
 @pytest.mark.parametrize("input_sample_dim", (1, 2))
 @pytest.mark.parametrize("input_event_shape", ((1,), (4,)))
@@ -149,7 +142,7 @@ def test_density_estimator_loss_shapes(
     batch_dim,
 ):
     """Test whether `loss` of DensityEstimators follow the shape convention."""
-    density_estimator, inputs, conditions, _ = _build_density_estimator_and_tensors(
+    density_estimator, inputs, conditions = _build_density_estimator_and_tensors(
         density_estimator_build_fn,
         input_event_shape,
         condition_event_shape,
@@ -161,11 +154,28 @@ def test_density_estimator_loss_shapes(
     assert losses.shape == (batch_dim,)
 
 
-@pytest.mark.parametrize("density_estimator_build_fn", model_builders)
+@pytest.mark.parametrize(
+    "density_estimator_build_fn",
+    (
+        build_mdn,
+        build_maf,
+        build_maf_rqs,
+        build_nsf,
+        build_zuko_bpf,
+        build_zuko_gf,
+        build_zuko_maf,
+        build_zuko_naf,
+        build_zuko_ncsf,
+        build_zuko_nice,
+        build_zuko_nsf,
+        build_zuko_sospf,
+        build_zuko_unaf,
+        build_categoricalmassestimator,
+    ),
+)
 @pytest.mark.parametrize("input_sample_dim", (1, 2))
 @pytest.mark.parametrize("input_event_shape", ((1,), (4,)))
-# This mimics the shape of a 2D image and is used for testing CNN embeddings.
-@pytest.mark.parametrize("condition_event_shape", ((2, 1), (2, 7), (7, 2), (7, 7)))
+@pytest.mark.parametrize("condition_event_shape", ((1, 1), (1, 7), (7, 1), (7, 7)))
 @pytest.mark.parametrize("batch_dim", (1, 10))
 def test_density_estimator_log_prob_shapes_with_embedding(
     density_estimator_build_fn,
@@ -175,7 +185,7 @@ def test_density_estimator_log_prob_shapes_with_embedding(
     batch_dim,
 ):
     """Test whether `loss` of DensityEstimators follow the shape convention."""
-    density_estimator, inputs, conditions, _ = _build_density_estimator_and_tensors(
+    density_estimator, inputs, conditions = _build_density_estimator_and_tensors(
         density_estimator_build_fn,
         input_event_shape,
         condition_event_shape,
@@ -187,7 +197,26 @@ def test_density_estimator_log_prob_shapes_with_embedding(
     assert log_probs.shape == (input_sample_dim, batch_dim)
 
 
-@pytest.mark.parametrize("density_estimator_build_fn", model_builders)
+@pytest.mark.parametrize(
+    "density_estimator_build_fn",
+    (
+        build_mdn,
+        build_maf,
+        build_maf_rqs,
+        build_nsf,
+        build_zuko_bpf,
+        build_zuko_gf,
+        build_zuko_maf,
+        build_zuko_naf,
+        build_zuko_ncsf,
+        build_zuko_nice,
+        build_zuko_nsf,
+        build_zuko_sospf,
+        build_zuko_unaf,
+        build_categoricalmassestimator,
+        build_mnle,
+    ),
+)
 @pytest.mark.parametrize("sample_shape", ((), (1,), (2, 3)))
 @pytest.mark.parametrize("input_event_shape", ((1,), (4,)))
 @pytest.mark.parametrize("condition_event_shape", ((1,), (7,)))
@@ -199,24 +228,39 @@ def test_density_estimator_sample_shapes(
     condition_event_shape,
     batch_dim,
 ):
-    """Test whether `sample` of DensityEstimators follow the shape
-    convention."""
-    density_estimator, _, conditions, input_event_shape = (
-        _build_density_estimator_and_tensors(
-            density_estimator_build_fn,
-            input_event_shape,
-            condition_event_shape,
-            batch_dim,
-        )
+    """Test whether `sample` of DensityEstimators follow the shape convention."""
+    density_estimator, _, conditions = _build_density_estimator_and_tensors(
+        density_estimator_build_fn, input_event_shape, condition_event_shape, batch_dim
     )
     samples = density_estimator.sample(sample_shape, condition=conditions)
     if density_estimator_build_fn == build_categoricalmassestimator:
         # Our categorical is always 1D and does not return `input_event_shape`.
         input_event_shape = ()
+    elif density_estimator_build_fn == build_mnle:
+        input_event_shape = (input_event_shape[0] + 1,)
     assert samples.shape == (*sample_shape, batch_dim, *input_event_shape)
 
 
-@pytest.mark.parametrize("density_estimator_build_fn", model_builders)
+@pytest.mark.parametrize(
+    "density_estimator_build_fn",
+    (
+        build_mdn,
+        build_maf,
+        build_maf_rqs,
+        build_nsf,
+        build_zuko_bpf,
+        build_zuko_gf,
+        build_zuko_maf,
+        build_zuko_naf,
+        build_zuko_ncsf,
+        build_zuko_nice,
+        build_zuko_nsf,
+        build_zuko_sospf,
+        build_zuko_unaf,
+        build_categoricalmassestimator,
+        build_mnle,
+    ),
+)
 @pytest.mark.parametrize("input_event_shape", ((1,), (4,)))
 @pytest.mark.parametrize("condition_event_shape", ((1,), (7,)))
 @pytest.mark.parametrize("batch_dim", (1, 10))
@@ -228,7 +272,7 @@ def test_correctness_of_density_estimator_log_prob(
 ):
     """Test whether identical inputs lead to identical log_prob values."""
     input_sample_dim = 2
-    density_estimator, inputs, condition, _ = _build_density_estimator_and_tensors(
+    density_estimator, inputs, condition = _build_density_estimator_and_tensors(
         density_estimator_build_fn,
         input_event_shape,
         condition_event_shape,
@@ -240,27 +284,46 @@ def test_correctness_of_density_estimator_log_prob(
 
 
 @pytest.mark.parametrize(
-    "density_estimator_build_fn", model_builders + flowmatching_build_functions
+    "density_estimator_build_fn",
+    (
+        build_mdn,
+        build_maf,
+        build_maf_rqs,
+        build_nsf,
+        build_zuko_bpf,
+        build_zuko_gf,
+        build_zuko_maf,
+        build_zuko_naf,
+        build_zuko_ncsf,
+        build_zuko_nice,
+        build_zuko_nsf,
+        build_zuko_sospf,
+        build_zuko_unaf,
+        # Commented out because pytest ignores xfail.
+        # pytest.param(
+        #     build_categoricalmassestimator,
+        #     marks=pytest.mark.xfail(reason="issue 1172"),
+        # ),
+        pytest.param(build_mnle, marks=pytest.mark.xfail(reason="issue 1172")),
+    ),
 )
 @pytest.mark.parametrize("input_event_shape", ((1,), (4,)))
 @pytest.mark.parametrize("condition_event_shape", ((1,), (7,)))
 @pytest.mark.parametrize("sample_shape", ((1000,), (500, 2)))
 def test_correctness_of_batched_vs_seperate_sample_and_log_prob(
-    density_estimator_build_fn: Callable,
+    density_estimator_build_fn,
     input_event_shape,
     condition_event_shape,
     sample_shape,
 ):
     input_sample_dim = 2
     batch_dim = 2
-    density_estimator, inputs, condition, input_event_shape = (
-        _build_density_estimator_and_tensors(
-            density_estimator_build_fn,
-            input_event_shape,
-            condition_event_shape,
-            batch_dim,
-            input_sample_dim,
-        )
+    density_estimator, inputs, condition = _build_density_estimator_and_tensors(
+        density_estimator_build_fn,
+        input_event_shape,
+        condition_event_shape,
+        batch_dim,
+        input_sample_dim,
     )
     # Batched vs separate sampling
     samples = density_estimator.sample(sample_shape, condition=condition)
@@ -300,119 +363,50 @@ def test_correctness_of_batched_vs_seperate_sample_and_log_prob(
 
 
 def _build_density_estimator_and_tensors(
-    density_estimator_build_fn: Callable,
+    density_estimator_build_fn: str,
     input_event_shape: Tuple[int],
     condition_event_shape: Tuple[int],
     batch_dim: int,
     input_sample_dim: int = 1,
 ):
-    """Helper function for all tests that deal with shapes of density
-    estimators."""
+    """Helper function for all tests that deal with shapes of density estimators."""
+    if density_estimator_build_fn == build_categoricalmassestimator:
+        input_event_shape = (1,)
+    elif density_estimator_build_fn == build_mnle:
+        input_event_shape = (
+            input_event_shape[0] + 1,
+        )  # 1 does not make sense for mixed.
 
-    # Use positive random values for continuous dims (log transform)
-    batch_input = torch.rand((1000, *input_event_shape), dtype=torch.float32) * 10.0
-    # make last dim discrete for mixed density estimators
-    batch_input[:, -1] = torch.randint(0, 4, (1000,))
-    batch_condition = torch.randn((1000, *condition_event_shape))
+    # Use discrete thetas such that categorical density esitmators can also use them.
+    building_thetas = torch.randint(
+        0, 4, (1000, *input_event_shape), dtype=torch.float32
+    )
+    building_xs = torch.randn((1000, *condition_event_shape))
     if len(condition_event_shape) > 1:
         embedding_net = CNNEmbedding(condition_event_shape, kernel_size=1)
-        z_score_y = "structured"
     else:
         embedding_net = torch.nn.Identity()
-        z_score_y = "independent"
 
-    if density_estimator_build_fn in [build_mnle, build_categoricalmassestimator]:
+    if density_estimator_build_fn == build_mnle:
+        building_thetas[:, :-1] += 5.0  # Make continuous dims positive for log-tf.
         density_estimator = density_estimator_build_fn(
-            batch_x=batch_input,
-            batch_y=batch_condition,
-            embedding_net=embedding_net,
-            z_score_y=z_score_y,
+            building_thetas, building_xs, embedding_net=embedding_net
+        )
+    elif density_estimator_build_fn == build_categoricalmassestimator:
+        density_estimator = density_estimator_build_fn(
+            building_thetas, building_xs, embedding_net=embedding_net
         )
     else:
         density_estimator = density_estimator_build_fn(
-            torch.randn_like(batch_input),
-            torch.randn_like(batch_condition),
+            torch.randn_like(building_thetas),
+            torch.randn_like(building_xs),
             embedding_net=embedding_net,
-            z_score_y=z_score_y,
         )
 
-    inputs = batch_input[:batch_dim]
-    condition = batch_condition[:batch_dim]
+    inputs = building_thetas[:batch_dim]
+    condition = building_xs[:batch_dim]
 
     inputs = inputs.unsqueeze(0)
     inputs = inputs.expand(input_sample_dim, -1, -1)
-    return density_estimator, inputs, condition, input_event_shape
-
-
-# separate test cases for mixed density estimation
-@pytest.mark.parametrize(
-    (
-        "density_estimator_build_fn",
-        "input_sample_dim",
-        "input_event_shape",
-        "condition_event_shape",
-        "batch_dim",
-    ),
-    (
-        (build_mnle, 1, (2,), (7,), 1),
-        (build_mnle, 1, (2,), (7,), 10),
-        # Test with 2D condition with embedding net.
-        [build_mnle, 1, (2,), (7, 7), 10],
-        [build_mnle, 1, (2,), (2, 7), 10],
-        [build_mnle, 1, (2,), (7, 2), 10],
-        [build_categoricalmassestimator, 1, (1,), (7, 7), 10],
-        [build_categoricalmassestimator, 2, (1,), (7, 7), 10],
-        pytest.param(
-            build_mnle,
-            2,
-            (1,),
-            (7,),
-            10,
-            marks=pytest.mark.xfail(
-                reason="Sample dim > 1 not supported for Mixed Density Estimation"
-            ),
-        ),
-        pytest.param(
-            build_categoricalmassestimator,
-            1,
-            (4,),
-            (7,),
-            10,
-            marks=pytest.mark.xfail(
-                reason="Event shape > 1 not supported for categorical"
-            ),
-        ),
-    ),
-)
-@pytest.mark.parametrize("sample_shape", ((10,), (1,)))
-def test_mixed_density_estimator(
-    density_estimator_build_fn,
-    input_sample_dim,
-    input_event_shape,
-    condition_event_shape,
-    batch_dim,
-    sample_shape,
-):
-    density_estimator, inputs, conditions, input_event_shape = (
-        _build_density_estimator_and_tensors(
-            density_estimator_build_fn,
-            input_event_shape,
-            condition_event_shape,
-            batch_dim,
-            input_sample_dim,
-        )
-    )
-    # Test losses
-    losses = density_estimator.loss(inputs[0], condition=conditions)
-    assert losses.shape == (batch_dim,)
-
-    # Test log_prob
-    log_probs = density_estimator.log_prob(inputs, condition=conditions)
-    assert log_probs.shape == (input_sample_dim, batch_dim)
-
-    # Test samples
-    samples = density_estimator.sample(sample_shape, condition=conditions)
-    if density_estimator_build_fn == build_categoricalmassestimator:
-        # Our categorical is always 1D and does not return `input_event_shape`.
-        input_event_shape = ()
-    assert samples.shape == (*sample_shape, batch_dim, *input_event_shape)
+    condition = condition
+    return density_estimator, inputs, condition

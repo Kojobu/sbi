@@ -11,7 +11,6 @@ from pyknos.nflows.flows import Flow
 from torch import Tensor
 from torch.distributions import Distribution
 
-from sbi.inference.potentials.base_potential import BasePotential
 from sbi.utils.torchutils import ensure_theta_batched
 from sbi.utils.user_input_checks import process_x
 
@@ -274,9 +273,10 @@ def condition_mog(
 class ConditionedPotential:
     def __init__(
         self,
-        potential_fn: BasePotential,
+        potential_fn: Callable,
         condition: Tensor,
         dims_to_sample: List[int],
+        allow_iid_x: bool = False,
     ):
         r"""
         Return conditional posterior log-probability or $-\infty$ if outside prior.
@@ -292,6 +292,7 @@ class ConditionedPotential:
         self.condition = condition
         self.dims_to_sample = dims_to_sample
         self.device = self.potential_fn.device
+        self.allow_iid_x = allow_iid_x
 
     def __call__(
         self, theta: Tensor, x_o: Optional[Tensor] = None, track_gradients: bool = True
@@ -322,23 +323,11 @@ class ConditionedPotential:
 
         return self.potential_fn(theta_condition, track_gradients=track_gradients)
 
-    @property
-    def x_is_iid(self) -> bool:
-        """If x has batch dimension greater than 1, whether to intepret the batch as iid
-        samples or batch of data points."""
-        if self._x_is_iid is not None:
-            return self._x_is_iid
-        else:
-            raise ValueError(
-                "No observed data is available. Use `potential_fn.set_x(x_o)`."
-            )
-
-    def set_x(self, x_o: Optional[Tensor], x_is_iid: Optional[bool] = True):
+    def set_x(self, x_o: Optional[Tensor]):
         """Check the shape of the observed data and, if valid, set it."""
         if x_o is not None:
-            x_o = process_x(x_o).to(self.device)
-        self._x_is_iid = x_is_iid
-        self.potential_fn.set_x(x_o, x_is_iid=x_is_iid)
+            x_o = process_x(x_o, allow_iid_x=self.allow_iid_x).to(self.device)
+        self.potential_fn.set_x(x_o)
 
     @property
     def x_o(self) -> Tensor:

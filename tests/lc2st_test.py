@@ -1,5 +1,5 @@
 # This file is part of sbi, a toolkit for simulation-based inference. sbi is licensed
-# under the Apache License Version 2.0, see <https://www.apache.org/licenses/>
+# under the Affero General Public License v3, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import torch
 from sklearn.neural_network import MLPClassifier
 
 from sbi.diagnostics.lc2st import LC2ST, LC2ST_NF
-from sbi.inference import NPE
+from sbi.inference import SNPE
 from sbi.simulators.gaussian_mixture import (
     gaussian_mixture,
     uniform_prior_gaussian_mixture,
@@ -38,7 +38,7 @@ def test_running_lc2st(method, classifier, cv_folds, num_ensemble, z_score):
     x_train = simulator(theta_train)
 
     # Train the neural posterior estimators
-    inference = NPE(prior, density_estimator='maf')
+    inference = SNPE(prior, density_estimator='maf')
     inference = inference.append_simulations(theta=theta_train, x=x_train)
     npe = inference.train(training_batch_size=100, max_num_epochs=1)
 
@@ -116,10 +116,10 @@ def test_lc2st_true_negativ_rate(method):
     num_runs = 100
     confidence_level = 0.95
 
-    # use little training data and num_epochs to obtain "bad" estimator.
+    # bad estimator :small training and num_epochs
     # (no convergence to the true posterior)
-    num_train = 100
-    num_epochs = 2
+    num_train = 1_000
+    num_epochs = 5
 
     num_cal = 1_000
     num_eval = 10_000
@@ -134,7 +134,7 @@ def test_lc2st_true_negativ_rate(method):
     x_train = simulator(theta_train)
 
     # Train the neural posterior estimators
-    inference = NPE(prior, density_estimator='maf')
+    inference = SNPE(prior, density_estimator='maf')
     inference = inference.append_simulations(theta=theta_train, x=x_train)
     npe = inference.train(training_batch_size=100, max_num_epochs=num_epochs)
 
@@ -197,7 +197,7 @@ def test_lc2st_true_positiv_rate(method):
 
     # good estimator: big training and num_epochs = accept
     # (convergence of the estimator)
-    num_train = 5_000
+    num_train = 10_000
     num_epochs = 200
 
     num_cal = 1_000
@@ -213,7 +213,7 @@ def test_lc2st_true_positiv_rate(method):
     x_train = simulator(theta_train)
 
     # Train the neural posterior estimators
-    inference = NPE(prior, density_estimator='maf')
+    inference = SNPE(prior, density_estimator='maf')
     inference = inference.append_simulations(theta=theta_train, x=x_train)
     npe = inference.train(training_batch_size=100, max_num_epochs=num_epochs)
 

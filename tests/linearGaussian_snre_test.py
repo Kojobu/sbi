@@ -11,16 +11,17 @@ from sbi import utils
 from sbi.inference import (
     AALR,
     BNRE,
-    NRE_A,
-    NRE_B,
-    NRE_C,
+    SNRE_A,
+    SNRE_B,
+    SNRE_C,
     ImportanceSamplingPosterior,
     MCMCPosterior,
     RejectionPosterior,
     VIPosterior,
     ratio_estimator_based_potential,
+    simulate_for_sbi,
 )
-from sbi.inference.trainers.nre.nre_base import RatioEstimator
+from sbi.inference.snre.snre_base import RatioEstimator
 from sbi.simulators.linear_gaussian import (
     diagonal_linear_gaussian,
     linear_gaussian,
@@ -28,6 +29,7 @@ from sbi.simulators.linear_gaussian import (
     samples_true_posterior_linear_gaussian_uniform_prior,
     true_posterior_linear_gaussian_mvn_prior,
 )
+from sbi.utils.user_input_checks import process_prior, process_simulator
 from tests.test_utils import (
     check_c2st,
     get_dkl_gaussian_prior,
@@ -37,25 +39,32 @@ from tests.test_utils import (
 
 @pytest.mark.mcmc
 @pytest.mark.parametrize("num_dim", (1,))  # dim 3 is tested below.
-@pytest.mark.parametrize("nre_method", (NRE_B, NRE_C))
-def test_api_nre_multiple_trials_and_rounds_map(
+@pytest.mark.parametrize("snre_method", (SNRE_B, SNRE_C))
+def test_api_snre_multiple_trials_and_rounds_map(
     num_dim: int,
-    nre_method: RatioEstimator,
+    snre_method: RatioEstimator,
     mcmc_params_fast: dict,
     num_rounds: int = 2,
     num_samples: int = 12,
     num_simulations: int = 100,
 ):
-    """Test NRE API with 2 rounds, different priors num trials and MAP."""
+    """Test SNRE API with 2 rounds, different priors num trials and MAP."""
     prior = MultivariateNormal(loc=zeros(num_dim), covariance_matrix=eye(num_dim))
 
     simulator = diagonal_linear_gaussian
-    inference = nre_method(prior=prior, classifier="mlp", show_progress_bars=False)
+    inference = snre_method(prior=prior, classifier="mlp", show_progress_bars=False)
+
+    prior, _, prior_returns_numpy = process_prior(prior)
+    simulator = process_simulator(simulator, prior, prior_returns_numpy)
 
     proposals = [prior]
     for _ in range(num_rounds):
-        theta = proposals[-1].sample((num_simulations,))
-        x = simulator(theta)
+        theta, x = simulate_for_sbi(
+            simulator,
+            proposals[-1],
+            num_simulations,
+            simulation_batch_size=num_simulations,
+        )
         inference.append_simulations(theta, x).train(
             training_batch_size=100, max_num_epochs=2
         )
@@ -71,9 +80,9 @@ def test_api_nre_multiple_trials_and_rounds_map(
 
 
 @pytest.mark.mcmc
-@pytest.mark.parametrize("nre_method", (NRE_B, NRE_C))
+@pytest.mark.parametrize("snre_method", (SNRE_B, SNRE_C))
 def test_c2st_sre_on_linearGaussian(
-    nre_method: RatioEstimator, mcmc_params_accurate: dict
+    snre_method: RatioEstimator, mcmc_params_accurate: dict
 ):
     """Test whether SRE infers well a simple example with available ground truth.
 
@@ -102,10 +111,14 @@ def test_c2st_sre_on_linearGaussian(
             theta, likelihood_shift, likelihood_cov, num_discarded_dims=discard_dims
         )
 
-    inference = nre_method(classifier="resnet", show_progress_bars=False)
+    inference = snre_method(classifier="resnet", show_progress_bars=False)
 
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
+    prior, _, prior_returns_numpy = process_prior(prior)
+    simulator = process_simulator(simulator, prior, prior_returns_numpy)
+
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations, simulation_batch_size=100
+    )
     ratio_estimator = inference.append_simulations(theta, x).train()
 
     x_o = zeros(1, x_dim)
@@ -131,21 +144,21 @@ def test_c2st_sre_on_linearGaussian(
     samples = posterior.sample((num_samples,))
 
     # Compute the c2st and assert it is near chance level of 0.5.
-    check_c2st(samples, target_samples, alg=f"{nre_method.__name__}")
+    check_c2st(samples, target_samples, alg=f"{snre_method.__name__}")
 
 
 @pytest.mark.mcmc
 @pytest.mark.slow
-@pytest.mark.parametrize("nre_method", (NRE_A, NRE_B, NRE_C, BNRE))
+@pytest.mark.parametrize("snre_method", (SNRE_A, SNRE_B, SNRE_C, BNRE))
 @pytest.mark.parametrize("prior_str", ("gaussian", "uniform"))
 @pytest.mark.parametrize("num_trials", (3,))  # num_trials=1 is tested above.
-def test_c2st_nre_variants_on_linearGaussian_with_multiple_trials(
-    nre_method: RatioEstimator,
+def test_c2st_snre_variants_on_linearGaussian_with_multiple_trials(
+    snre_method: RatioEstimator,
     prior_str: str,
     num_trials: int,
     mcmc_params_accurate: dict,
 ):
-    """Test C2ST and MAP accuracy of NRE variants on linear gaussian.
+    """Test C2ST and MAP accuracy of SNRE variants on linear gaussian.
 
     Args:
         num_dim: parameter dimension of the gaussian model
@@ -154,12 +167,12 @@ def test_c2st_nre_variants_on_linearGaussian_with_multiple_trials(
     """
 
     num_dim = 2
-    num_simulations = 2000
+    num_simulations = 1750
     num_samples = 500
     x_o = zeros(num_trials, num_dim)
 
     train_kwargs = {"training_batch_size": 100}
-    if nre_method == BNRE:
+    if snre_method == BNRE:
         train_kwargs["regularization_strength"] = 20
 
     # `likelihood_mean` will be `likelihood_shift + theta`.
@@ -181,11 +194,12 @@ def test_c2st_nre_variants_on_linearGaussian_with_multiple_trials(
         show_progress_bars=False,
     )
 
-    inference = nre_method(**kwargs)
+    inference = snre_method(**kwargs)
 
     # Should use default `num_atoms=10` for SRE; `num_atoms=2` for AALR
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations, simulation_batch_size=num_simulations
+    )
     ratio_estimator = inference.append_simulations(theta, x).train(**train_kwargs)
     potential_fn, theta_transform = ratio_estimator_based_potential(
         ratio_estimator=ratio_estimator, prior=prior, x_o=x_o
@@ -214,13 +228,13 @@ def test_c2st_nre_variants_on_linearGaussian_with_multiple_trials(
     check_c2st(
         samples,
         target_samples,
-        alg=f"nre-{prior_str}-{nre_method.__name__}-{num_trials}trials",
+        alg=f"snre-{prior_str}-{snre_method.__name__}-{num_trials}trials",
     )
 
     map_ = posterior.map(num_init_samples=1_000, init_method="proposal")
 
     # Checks for log_prob()
-    if prior_str == "gaussian" and isinstance(nre_method, (AALR, BNRE)):
+    if prior_str == "gaussian" and isinstance(snre_method, (AALR, BNRE)):
         # For the Gaussian prior, we compute the KLd between ground truth and
         # posterior. We can do this only if the classifier_loss was as described in
         # Hermans et al. 2020 ('aalr') since Durkan et al. 2020 version only allows
@@ -250,11 +264,11 @@ def test_c2st_nre_variants_on_linearGaussian_with_multiple_trials(
 
 @pytest.mark.slow
 @pytest.mark.parametrize("num_trials", (1, 3))
-@pytest.mark.parametrize("snre_method", (NRE_B, NRE_C))
+@pytest.mark.parametrize("snre_method", (SNRE_B, SNRE_C))
 def test_c2st_multi_round_snr_on_linearGaussian_vi(
     num_trials: int, snre_method: RatioEstimator
 ):
-    """Test C2ST accuracy of 2-round-NRE with variational inference sampling."""
+    """Test C2ST accuracy of 2-round-SNRE with variational inference sampling."""
 
     num_dim = 2
     x_o = zeros((num_trials, num_dim))
@@ -278,8 +292,9 @@ def test_c2st_multi_round_snr_on_linearGaussian_vi(
 
     inference = snre_method(show_progress_bars=False)
 
-    theta = prior.sample((num_simulations_per_round,))
-    x = simulator(theta)
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations_per_round, simulation_batch_size=50
+    )
     ratio_estimator = inference.append_simulations(theta, x).train()
     potential_fn, theta_transform = ratio_estimator_based_potential(
         prior=prior, ratio_estimator=ratio_estimator, x_o=x_o
@@ -290,8 +305,9 @@ def test_c2st_multi_round_snr_on_linearGaussian_vi(
     )
     posterior1.train()
 
-    theta = posterior1.sample((num_simulations_per_round,))
-    x = simulator(theta)
+    theta, x = simulate_for_sbi(
+        simulator, posterior1, num_simulations_per_round, simulation_batch_size=50
+    )
     ratio_estimator = inference.append_simulations(theta, x).train()
     potential_fn, theta_transform = ratio_estimator_based_potential(
         prior=prior, ratio_estimator=ratio_estimator, x_o=x_o
@@ -371,10 +387,11 @@ def test_api_sre_sampling_methods(
 
     simulator = diagonal_linear_gaussian
 
-    inference = NRE_B(classifier="resnet", show_progress_bars=False)
+    inference = SNRE_B(classifier="resnet", show_progress_bars=False)
 
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations, simulation_batch_size=num_simulations
+    )
     ratio_estimator = inference.append_simulations(theta, x).train(max_num_epochs=5)
     potential_fn, theta_transform = ratio_estimator_based_potential(
         ratio_estimator=ratio_estimator, prior=prior, x_o=x_o

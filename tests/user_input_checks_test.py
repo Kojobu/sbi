@@ -11,7 +11,7 @@ from pyknos.mdn.mdn import MultivariateGaussianMDN
 from torch import Tensor, eye, nn, ones, zeros
 from torch.distributions import Beta, Distribution, Gamma, MultivariateNormal, Uniform
 
-from sbi.inference import NPE_A, NPE_C, simulate_for_sbi
+from sbi.inference import SNPE_A, SNPE_C, simulate_for_sbi
 from sbi.inference.posteriors.direct_posterior import DirectPosterior
 from sbi.simulators.linear_gaussian import diagonal_linear_gaussian
 from sbi.utils import mcmc_transform, within_support
@@ -181,17 +181,19 @@ def test_process_prior(prior):
 
 
 @pytest.mark.parametrize(
-    "x, x_shape",
+    "x, x_shape, allow_iid",
     (
-        (ones(3), torch.Size([3])),
-        (ones(1, 3), torch.Size([3])),
-        (ones(10, 3), torch.Size([10, 3])),  # 2D data / iid NPE
-        pytest.param(ones(10, 3), None),  # 2D data / iid NPE without x_shape
-        (ones(10, 10), torch.Size([10])),  # iid likelihood based
+        (ones(3), torch.Size([3]), False),
+        (ones(1, 3), torch.Size([3]), False),
+        (ones(10, 3), torch.Size([10, 3]), False),  # 2D data / iid SNPE
+        pytest.param(
+            ones(10, 3), None, False, marks=pytest.mark.xfail
+        ),  # 2D data / iid SNPE without x_shape
+        (ones(10, 10), torch.Size([10]), True),  # iid likelihood based
     ),
 )
-def test_process_x(x, x_shape):
-    process_x(x, x_shape)
+def test_process_x(x, x_shape, allow_iid):
+    process_x(x, x_shape, allow_iid_x=allow_iid)
 
 
 @pytest.mark.parametrize(
@@ -278,7 +280,7 @@ def test_prepare_sbi_problem(simulator: Callable, prior):
     assert prior.sample().dtype == torch.float32
 
 
-@pytest.mark.parametrize("snpe_method", [NPE_A, NPE_C])
+@pytest.mark.parametrize("snpe_method", [SNPE_A, SNPE_C])
 @pytest.mark.parametrize(
     "user_simulator, user_prior",
     (
@@ -320,7 +322,7 @@ def test_inference_with_user_sbi_problems(
     check_sbi_inputs(simulator, prior)
     inference = snpe_method(
         prior=prior,
-        density_estimator="mdn_snpe_a" if snpe_method == NPE_A else "maf",
+        density_estimator="mdn_snpe_a" if snpe_method == SNPE_A else "maf",
         show_progress_bars=False,
     )
 
@@ -330,10 +332,10 @@ def test_inference_with_user_sbi_problems(
     posterior_estimator = inference.append_simulations(theta, x).train(max_num_epochs=2)
 
     # Build posterior.
-    if snpe_method == NPE_A:
+    if snpe_method == SNPE_A:
         if not isinstance(prior, (MultivariateNormal, BoxUniform, DirectPosterior)):
             with pytest.raises(AssertionError):
-                # NPE-A does not support priors yet.
+                # SNPE-A does not support priors yet.
                 posterior_estimator = inference.correct_for_proposal()
                 _ = DirectPosterior(
                     posterior_estimator=posterior_estimator, prior=prior
@@ -500,4 +502,4 @@ def test_passing_custom_density_estimator(arg):
     else:
         density_estimator = arg
     prior = MultivariateNormal(torch.zeros(2), torch.eye(2))
-    _ = NPE_C(prior=prior, density_estimator=density_estimator)
+    _ = SNPE_C(prior=prior, density_estimator=density_estimator)

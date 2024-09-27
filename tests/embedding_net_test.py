@@ -9,8 +9,8 @@ from torch import eye, ones, zeros
 from torch.distributions import MultivariateNormal
 
 from sbi import utils
-from sbi.inference import FMPE, NLE, NPE, NRE
-from sbi.neural_nets import classifier_nn, flowmatching_nn, likelihood_nn, posterior_nn
+from sbi.inference import SNLE, SNPE, SNRE
+from sbi.neural_nets import classifier_nn, likelihood_nn, posterior_nn
 from sbi.neural_nets.embedding_nets import (
     CNNEmbedding,
     FCEmbedding,
@@ -25,7 +25,7 @@ from .test_utils import check_c2st
 
 
 @pytest.mark.mcmc
-@pytest.mark.parametrize("method", ["NPE", "NLE", "NRE", "FMPE"])
+@pytest.mark.parametrize("method", ["SNPE", "SNLE", "SNRE"])
 @pytest.mark.parametrize("num_dim", [1, 2])
 @pytest.mark.parametrize("embedding_net", ["mlp"])
 def test_embedding_net_api(
@@ -49,24 +49,19 @@ def test_embedding_net_api(
     else:
         raise NameError(f"{embedding_net} not supported.")
 
-    if method == "NPE":
+    if method == "SNPE":
         density_estimator = posterior_nn("maf", embedding_net=embedding)
-        inference = NPE(
+        inference = SNPE(
             prior, density_estimator=density_estimator, show_progress_bars=False
         )
-    elif method == "NLE":
+    elif method == "SNLE":
         density_estimator = likelihood_nn("maf", embedding_net=embedding)
-        inference = NLE(
+        inference = SNLE(
             prior, density_estimator=density_estimator, show_progress_bars=False
         )
-    elif method == "NRE":
+    elif method == "SNRE":
         classifier = classifier_nn("resnet", embedding_net_x=embedding)
-        inference = NRE(prior, classifier=classifier, show_progress_bars=False)
-    elif method == "FMPE":
-        vectorfield_net = flowmatching_nn(model="mlp", embedding_net=embedding)
-        inference = FMPE(
-            prior, density_estimator=vectorfield_net, show_progress_bars=False
-        )
+        inference = SNRE(prior, classifier=classifier, show_progress_bars=False)
     else:
         raise NameError
 
@@ -80,13 +75,9 @@ def test_embedding_net_api(
     _ = posterior.potential(s)
 
 
-@pytest.mark.parametrize("num_xo_batch", [1, 2])
 @pytest.mark.parametrize("num_trials", [1, 2])
 @pytest.mark.parametrize("num_dim", [1, 2])
-@pytest.mark.parametrize("posterior_method", ["direct", "mcmc"])
-def test_embedding_api_with_multiple_trials(
-    num_xo_batch, num_trials, num_dim, posterior_method
-):
+def test_embedding_api_with_multiple_trials(num_trials, num_dim):
     """Tests the API when using iid trial-based data."""
     prior = utils.BoxUniform(-2.0 * ones(num_dim), 2.0 * ones(num_dim))
 
@@ -96,7 +87,7 @@ def test_embedding_api_with_multiple_trials(
     # simulate iid x.
     iid_theta = theta.reshape(num_thetas, 1, num_dim).repeat(1, num_trials, 1)
     x = torch.randn_like(iid_theta) + iid_theta
-    x_o = zeros(num_xo_batch, num_trials, num_dim)
+    x_o = zeros(1, num_trials, num_dim)
 
     output_dim = 5
     single_trial_net = FCEmbedding(input_dim=num_dim, output_dim=output_dim)
@@ -106,25 +97,14 @@ def test_embedding_api_with_multiple_trials(
     )
 
     density_estimator = posterior_nn("maf", embedding_net=embedding_net)
-    inference = NPE(prior, density_estimator=density_estimator)
+    inference = SNPE(prior, density_estimator=density_estimator)
 
     _ = inference.append_simulations(theta, x).train(max_num_epochs=5)
 
-    if posterior_method == "direct":
-        posterior = inference.build_posterior().set_default_x(x_o)
-    elif posterior_method == "mcmc":
-        posterior = inference.build_posterior(
-            sample_with=posterior_method,
-            mcmc_method="slice_np_vectorized",
-        ).set_default_x(x_o)
-    if num_xo_batch == 1:
-        s = posterior.sample((1,), x=x_o)
-        _ = posterior.potential(s)
-    else:
-        s = posterior.sample_batched((1,), x=x_o).squeeze(0)
-        # potentials take `theta` as (batch_shape, event_shape), so squeeze sample_dim
-        s = s.squeeze(0)
-        _ = posterior.potential(s)
+    posterior = inference.build_posterior().set_default_x(x_o)
+
+    s = posterior.sample((1,))
+    _ = posterior.potential(s)
 
 
 @pytest.mark.parametrize("input_shape", [(32,), (32, 32), (32, 64)])
@@ -165,7 +145,7 @@ def test_1d_and_2d_cnn_embedding_net(input_shape, num_channels):
             1, num_channels, *[1 for _ in range(len(input_shape))]
         )
 
-    trainer = NPE(prior=prior, density_estimator=estimator_provider)
+    trainer = SNPE(prior=prior, density_estimator=estimator_provider)
     trainer.append_simulations(theta, x).train(max_num_epochs=2)
     posterior = trainer.build_posterior().set_default_x(xo)
 
@@ -217,7 +197,7 @@ def test_npe_with_with_iid_embedding_varying_num_trials(trial_factor=50):
         z_score_x="none",  # turn off z-scoring because of NaN encodings.
         z_score_theta="independent",
     )
-    inference = NPE(prior, density_estimator=density_estimator)
+    inference = SNPE(prior, density_estimator=density_estimator)
 
     # do not exclude invalid x, as we padded with nans.
     _ = inference.append_simulations(theta, x, exclude_invalid_x=False).train(

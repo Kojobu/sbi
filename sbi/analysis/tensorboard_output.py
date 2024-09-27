@@ -61,7 +61,7 @@ def plot_summary(
     logger = logging.getLogger(__name__)
 
     if tags is None:
-        tags = ["validation_loss"]
+        tags = ["validation_log_probs"]
 
     size_guidance = deepcopy(DEFAULT_SIZE_GUIDANCE)
     size_guidance.update(scalars=tensorboard_scalar_limit)

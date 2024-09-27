@@ -14,8 +14,3 @@
     selection:
       filters: [ "!^_", "^__", "!^__class__" ]
       inherited_members: true
-
-::: sbi.inference.potentials.score_based_potential.score_estimator_based_potential
-    selection:
-      filters: [ "!^_", "^__", "!^__class__" ]
-      inherited_members: true

@@ -1,5 +1,5 @@
 # This file is part of sbi, a toolkit for simulation-based inference. sbi is licensed
-# under the Apache License Version 2.0, see <https://www.apache.org/licenses/>
+# under the Affero General Public License v3, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import torch
 from torch import eye, zeros
 from torch.distributions import MultivariateNormal
 
+from sbi.neural_nets.classifier import build_linear_classifier
 from sbi.neural_nets.embedding_nets import CNNEmbedding
-from sbi.neural_nets.net_builders import build_linear_classifier
 from sbi.neural_nets.ratio_estimators import RatioEstimator
 
 

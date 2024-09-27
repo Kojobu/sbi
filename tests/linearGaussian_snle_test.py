@@ -9,12 +9,13 @@ from torch import eye, ones, zeros
 from torch.distributions import HalfNormal, MultivariateNormal
 
 from sbi.inference import (
-    NLE,
+    SNLE,
     ImportanceSamplingPosterior,
     MCMCPosterior,
     RejectionPosterior,
     VIPosterior,
     likelihood_estimator_based_potential,
+    simulate_for_sbi,
 )
 from sbi.neural_nets import likelihood_nn
 from sbi.simulators.linear_gaussian import (
@@ -25,20 +26,23 @@ from sbi.simulators.linear_gaussian import (
     true_posterior_linear_gaussian_mvn_prior,
 )
 from sbi.utils import BoxUniform
-from sbi.utils.user_input_checks import process_prior
+from sbi.utils.user_input_checks import (
+    process_prior,
+    process_simulator,
+)
 
 from .test_utils import check_c2st, get_prob_outside_uniform_prior
 
 
 @pytest.mark.parametrize("num_dim", (1,))  # dim 3 is tested below.
 @pytest.mark.parametrize("prior_str", ("uniform", "gaussian"))
-def test_api_nle_multiple_trials_and_rounds_map(
+def test_api_snle_multiple_trials_and_rounds_map(
     num_dim: int, prior_str: str, mcmc_params_fast: dict
 ):
-    """Test NLE API with 2 rounds, different priors num trials and MAP."""
+    """Test SNLE API with 2 rounds, different priors num trials and MAP."""
     num_rounds = 2
     num_samples = 1
-    num_simulations_per_round = 100
+    num_simulations = 100
 
     if prior_str == "gaussian":
         prior_mean = zeros(num_dim)
@@ -48,12 +52,18 @@ def test_api_nle_multiple_trials_and_rounds_map(
         prior = BoxUniform(-2.0 * ones(num_dim), 2.0 * ones(num_dim))
 
     simulator = diagonal_linear_gaussian
-    inference = NLE(prior=prior, density_estimator="mdn", show_progress_bars=False)
+    prior, _, prior_returns_numpy = process_prior(prior)
+    simulator = process_simulator(simulator, prior, prior_returns_numpy)
+    inference = SNLE(prior=prior, density_estimator="mdn", show_progress_bars=False)
 
     proposals = [prior]
     for _ in range(num_rounds):
-        theta = proposals[-1].sample((num_simulations_per_round,))
-        x = simulator(theta)
+        theta, x = simulate_for_sbi(
+            simulator,
+            proposals[-1],
+            num_simulations,
+            simulation_batch_size=num_simulations,
+        )
         inference.append_simulations(theta, x).train(
             training_batch_size=100, max_num_epochs=2
         )
@@ -68,18 +78,18 @@ def test_api_nle_multiple_trials_and_rounds_map(
         posterior.map(num_iter=1)
 
 
-def test_c2st_nle_on_linear_gaussian_different_dims(
+def test_c2st_snl_on_linear_gaussian_different_dims(
     mcmc_params_accurate: dict, model_str="maf"
 ):
-    """Test NLE on linear Gaussian task with different theta and x dims."""
+    """Test SNLE on linear Gaussian task with different theta and x dims."""
 
     theta_dim = 3
     x_dim = 2
     discard_dims = theta_dim - x_dim
 
     x_o = zeros(1, x_dim)
-    num_samples = 1000
-    num_simulations = 2000
+    num_samples = 500
+    num_simulations = 1000
 
     # likelihood_mean will be likelihood_shift+theta
     likelihood_shift = -1.0 * ones(x_dim)
@@ -107,11 +117,17 @@ def test_c2st_nle_on_linear_gaussian_different_dims(
         )
 
     density_estimator = likelihood_nn(model=model_str, num_transforms=3)
-    inference = NLE(density_estimator=density_estimator, show_progress_bars=False)
+    inference = SNLE(density_estimator=density_estimator, show_progress_bars=False)
 
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
-
+    prior, _, prior_returns_numpy = process_prior(prior)
+    simulator = process_simulator(simulator, prior, prior_returns_numpy)
+    theta, x = simulate_for_sbi(
+        simulator,
+        prior,
+        num_simulations,
+        simulation_batch_size=num_simulations,
+        seed=1,
+    )
     likelihood_estimator = inference.append_simulations(theta, x).train()
     potential_fn, theta_transform = likelihood_estimator_based_potential(
         prior=prior, likelihood_estimator=likelihood_estimator, x_o=x_o
@@ -126,14 +142,14 @@ def test_c2st_nle_on_linear_gaussian_different_dims(
     samples = posterior.sample((num_samples,))
 
     # Compute the c2st and assert it is near chance level of 0.5.
-    check_c2st(samples, target_samples, alg=f"nle_a-{model_str}")
+    check_c2st(samples, target_samples, alg=f"snle_a-{model_str}")
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("num_dim", (1, 2))
 @pytest.mark.parametrize("prior_str", ("uniform", "gaussian"))
 @pytest.mark.parametrize("model_str", ("maf", "zuko_maf"))
-def test_c2st_and_map_nle_on_linearGaussian_different(
+def test_c2st_and_map_snl_on_linearGaussian_different(
     num_dim: int, prior_str: str, model_str: str, mcmc_params_accurate: dict
 ):
     """Test SNL on linear Gaussian, comparing to ground truth posterior via c2st.
@@ -163,11 +179,11 @@ def test_c2st_and_map_nle_on_linearGaussian_different(
         return linear_gaussian(theta, likelihood_shift, likelihood_cov)
 
     density_estimator = likelihood_nn(model_str, num_transforms=3)
-    inference = NLE(density_estimator=density_estimator, show_progress_bars=False)
+    inference = SNLE(density_estimator=density_estimator, show_progress_bars=False)
 
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
-
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations, simulation_batch_size=num_simulations
+    )
     likelihood_estimator = inference.append_simulations(theta, x).train()
 
     # Test inference amortized over trials.
@@ -206,7 +222,7 @@ def test_c2st_and_map_nle_on_linearGaussian_different(
         check_c2st(
             samples,
             target_samples,
-            alg=f"nle_a-{prior_str}-prior-{model_str}-{num_trials}-trials",
+            alg=f"snle_a-{prior_str}-prior-{model_str}-{num_trials}-trials",
         )
 
         map_ = posterior.map(
@@ -245,7 +261,7 @@ def test_map_with_multiple_independent_prior(use_transform):
     x = simulator(theta)
     x_o = zeros((1, dim))
 
-    trainer = NLE(prior).append_simulations(theta, x)
+    trainer = SNLE(prior).append_simulations(theta, x)
     likelihood_estimator = trainer.train(max_num_epochs=5)
 
     potential_fn, parameter_transform = likelihood_estimator_based_potential(
@@ -264,7 +280,7 @@ def test_map_with_multiple_independent_prior(use_transform):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("num_trials", (1, 3))
-def test_c2st_multi_round_nle_on_linearGaussian(
+def test_c2st_multi_round_snl_on_linearGaussian(
     num_trials: int, mcmc_params_accurate: dict
 ):
     """Test SNL on linear Gaussian, comparing to ground truth posterior via c2st."""
@@ -289,11 +305,11 @@ def test_c2st_multi_round_nle_on_linearGaussian(
     def simulator(theta):
         return linear_gaussian(theta, likelihood_shift, likelihood_cov)
 
-    inference = NLE(show_progress_bars=False)
+    inference = SNLE(show_progress_bars=False)
 
-    theta = prior.sample((num_simulations_per_round,))
-    x = simulator(theta)
-
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations_per_round, simulation_batch_size=50
+    )
     likelihood_estimator = inference.append_simulations(theta, x).train()
     potential_fn, theta_transform = likelihood_estimator_based_potential(
         prior=prior, likelihood_estimator=likelihood_estimator, x_o=x_o
@@ -306,9 +322,12 @@ def test_c2st_multi_round_nle_on_linearGaussian(
         **mcmc_params_accurate,
     )
 
-    theta = posterior1.sample((num_simulations_per_round,))
-    x = simulator(theta)
-
+    theta, x = simulate_for_sbi(
+        simulator,
+        posterior1,
+        num_simulations_per_round,
+        simulation_batch_size=50,
+    )
     likelihood_estimator = inference.append_simulations(theta, x).train()
     potential_fn, theta_transform = likelihood_estimator_based_potential(
         prior=prior, likelihood_estimator=likelihood_estimator, x_o=x_o
@@ -329,7 +348,7 @@ def test_c2st_multi_round_nle_on_linearGaussian(
 
 @pytest.mark.slow
 @pytest.mark.parametrize("num_trials", (1, 3))
-def test_c2st_multi_round_nle_on_linearGaussian_vi(num_trials: int):
+def test_c2st_multi_round_snl_on_linearGaussian_vi(num_trials: int):
     """Test SNL on linear Gaussian, comparing to ground truth posterior via c2st."""
 
     num_dim = 2
@@ -352,11 +371,11 @@ def test_c2st_multi_round_nle_on_linearGaussian_vi(num_trials: int):
     def simulator(theta):
         return linear_gaussian(theta, likelihood_shift, likelihood_cov)
 
-    inference = NLE(show_progress_bars=False)
+    inference = SNLE(show_progress_bars=False)
 
-    theta = prior.sample((num_simulations_per_round,))
-    x = simulator(theta)
-
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations_per_round, simulation_batch_size=50
+    )
     likelihood_estimator = inference.append_simulations(theta, x).train()
     potential_fn, theta_transform = likelihood_estimator_based_potential(
         prior=prior, likelihood_estimator=likelihood_estimator, x_o=x_o
@@ -367,9 +386,12 @@ def test_c2st_multi_round_nle_on_linearGaussian_vi(num_trials: int):
     )
     posterior1.train()
 
-    theta = posterior1.sample((num_simulations_per_round,))
-    x = simulator(theta)
-
+    theta, x = simulate_for_sbi(
+        simulator,
+        posterior1,
+        num_simulations_per_round,
+        simulation_batch_size=50,
+    )
     likelihood_estimator = inference.append_simulations(theta, x).train()
     potential_fn, theta_transform = likelihood_estimator_based_potential(
         prior=prior, likelihood_estimator=likelihood_estimator, x_o=x_o
@@ -411,7 +433,7 @@ def test_c2st_multi_round_nle_on_linearGaussian_vi(num_trials: int):
     ),
 )
 @pytest.mark.parametrize("init_strategy", ("proposal", "resample", "sir"))
-def test_api_nle_sampling_methods(
+def test_api_snl_sampling_methods(
     sampling_method: str, prior_str: str, init_strategy: str, mcmc_params_fast: dict
 ):
     """Runs SNL on linear Gaussian and tests sampling from posterior via mcmc.
@@ -447,10 +469,11 @@ def test_api_nle_sampling_methods(
 
     simulator = diagonal_linear_gaussian
 
-    inference = NLE(show_progress_bars=False)
+    inference = SNLE(show_progress_bars=False)
 
-    theta = prior.sample((num_simulations,))
-    x = simulator(theta)
+    theta, x = simulate_for_sbi(
+        simulator, prior, num_simulations, simulation_batch_size=1000
+    )
     likelihood_estimator = inference.append_simulations(theta, x).train(
         max_num_epochs=5
     )

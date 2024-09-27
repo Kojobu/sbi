@@ -2,7 +2,6 @@
 # under the Apache License Version 2.0, see <https://www.apache.org/licenses/>
 
 import collections
-import copy
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 from warnings import warn
@@ -82,18 +81,24 @@ def plt_hist_1d(
     diag_kwargs: Dict,
 ) -> None:
     """Plot 1D histogram."""
-    hist_kwargs = copy.deepcopy(diag_kwargs["mpl_kwargs"])
-    if "bins" not in hist_kwargs or hist_kwargs["bins"] is None:
+    if (
+        "bins" not in diag_kwargs["mpl_kwargs"]
+        or diag_kwargs["mpl_kwargs"]["bins"] is None
+    ):
         if diag_kwargs["bin_heuristic"] == "Freedman-Diaconis":
             # The Freedman-Diaconis heuristic
             binsize = 2 * iqr(samples) * len(samples) ** (-1 / 3)
-            hist_kwargs["bins"] = np.arange(limits[0], limits[1] + binsize, binsize)
+            diag_kwargs["mpl_kwargs"]["bins"] = np.arange(
+                limits[0], limits[1] + binsize, binsize
+            )
         else:
             # TODO: add more bin heuristics
             pass
-    if isinstance(hist_kwargs["bins"], int):
-        hist_kwargs["bins"] = np.linspace(limits[0], limits[1], hist_kwargs["bins"])
-    ax.hist(samples, **hist_kwargs)
+    if isinstance(diag_kwargs["mpl_kwargs"]["bins"], int):
+        diag_kwargs["mpl_kwargs"]["bins"] = np.linspace(
+            limits[0], limits[1], diag_kwargs["mpl_kwargs"]["bins"]
+        )
+    ax.hist(samples, **diag_kwargs["mpl_kwargs"])
 
 
 def plt_kde_1d(
@@ -128,19 +133,18 @@ def plt_hist_2d(
     limits_row: torch.Tensor,
     offdiag_kwargs: Dict,
 ):
-    hist_kwargs = copy.deepcopy(offdiag_kwargs)
     """Plot 2D histogram."""
     if (
-        "bins" not in hist_kwargs["np_hist_kwargs"]
-        or hist_kwargs["np_hist_kwargs"]["bins"] is None
+        "bins" not in offdiag_kwargs["np_hist_kwargs"]
+        or offdiag_kwargs["np_hist_kwargs"]["bins"] is None
     ):
-        if hist_kwargs["bin_heuristic"] == "Freedman-Diaconis":
+        if offdiag_kwargs["bin_heuristic"] == "Freedman-Diaconis":
             # The Freedman-Diaconis heuristic applied to each direction
             binsize_col = 2 * iqr(samples_col) * len(samples_col) ** (-1 / 3)
             n_bins_col = int((limits_col[1] - limits_col[0]) / binsize_col)
             binsize_row = 2 * iqr(samples_row) * len(samples_row) ** (-1 / 3)
             n_bins_row = int((limits_row[1] - limits_row[0]) / binsize_row)
-            hist_kwargs["np_hist_kwargs"]["bins"] = [n_bins_col, n_bins_row]
+            offdiag_kwargs["np_hist_kwargs"]["bins"] = [n_bins_col, n_bins_row]
         else:
             # TODO: add more bin heuristics
             pass
@@ -151,7 +155,7 @@ def plt_hist_2d(
             [limits_col[0], limits_col[1]],
             [limits_row[0], limits_row[1]],
         ],
-        **hist_kwargs["np_hist_kwargs"],
+        **offdiag_kwargs["np_hist_kwargs"],
     )
     ax.imshow(
         hist.T,
@@ -161,7 +165,7 @@ def plt_hist_2d(
             yedges[0],
             yedges[-1],
         ),
-        **hist_kwargs["mpl_kwargs"],
+        **offdiag_kwargs["mpl_kwargs"],
     )
 
 
@@ -179,10 +183,10 @@ def plt_kde_2d(
     ax.imshow(
         Z,
         extent=(
-            limits_col[0].item(),
-            limits_col[1].item(),
-            limits_row[0].item(),
-            limits_row[1].item(),
+            limits_col[0],
+            limits_col[1],
+            limits_row[0],
+            limits_row[1],
         ),
         **offdiag_kwargs["mpl_kwargs"],
     )
@@ -350,7 +354,7 @@ def get_offdiag_funcs(
 def _format_subplot(
     ax: Axes,
     current: str,
-    limits: Union[List[List[float]], torch.Tensor],
+    limits: Union[List, torch.Tensor],
     ticks: Optional[Union[List, torch.Tensor]],
     labels_dim: List[str],
     fig_kwargs: Dict,
@@ -384,9 +388,6 @@ def _format_subplot(
     ):
         ax.set_facecolor(fig_kwargs["fig_bg_colors"][current])
     # Limits
-    if isinstance(limits, Tensor):
-        assert limits.dim() == 2, "Limits should be a 2D tensor."
-        limits = limits.tolist()
     if current == "diag":
         eps = fig_kwargs["x_lim_add_eps"]
         ax.set_xlim((limits[col][0] - eps, limits[col][1] + eps))
@@ -715,8 +716,8 @@ def pairplot(
     # Backwards compatibility
     if len(kwargs) > 0:
         warn(
-            f"you passed deprecated arguments **kwargs: {[key for key in kwargs]}, use "
-            "fig_kwargs instead. We continue calling the deprecated pairplot function",
+            "**kwargs are deprecated, use fig_kwargs instead. \n \
+              Calling the to be deprecated pairplot function",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -854,8 +855,8 @@ def marginal_plot(
     # backwards compatibility
     if len(kwargs) > 0:
         warn(
-            "**kwargs are deprecated, use fig_kwargs instead. "
-            "calling the to be deprecated marginal_plot function",
+            "**kwargs are deprecated, use fig_kwargs instead.\n\
+              calling the to be deprecated marginal_plot function",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -918,13 +919,13 @@ def _get_default_offdiag_kwargs(offdiag: Optional[str], i: int = 0) -> Dict:
         offdiag_kwargs = {
             "bw_method": "scott",
             "bins": 50,
-            "mpl_kwargs": {"cmap": "viridis", "origin": "lower", "aspect": "auto"},
+            "mpl_kwargs": {"cmap": "viridis", "origin": "lower"},
         }
 
     elif offdiag == "hist" or offdiag == "hist2d":
         offdiag_kwargs = {
             "bin_heuristic": None,  # "Freedman-Diaconis",
-            "mpl_kwargs": {"cmap": "viridis", "origin": "lower", "aspect": "auto"},
+            "mpl_kwargs": {"cmap": "viridis", "origin": "lower"},
             "np_hist_kwargs": {"bins": 50, "density": False},
         }
 
@@ -944,14 +945,13 @@ def _get_default_offdiag_kwargs(offdiag: Optional[str], i: int = 0) -> Dict:
             "levels": [0.68, 0.95, 0.99],
             "percentile": True,
             "mpl_kwargs": {
-                "colors": plt.rcParams["axes.prop_cycle"].by_key()["color"][i * 2],  # pyright: ignore[reportOptionalMemberAccess]
+                "colors": plt.rcParams["axes.prop_cycle"].by_key()["color"][i * 2]  # pyright: ignore[reportOptionalMemberAccess]
             },
         }
     elif offdiag == "plot":
         offdiag_kwargs = {
             "mpl_kwargs": {
-                "color": plt.rcParams["axes.prop_cycle"].by_key()["color"][i * 2],  # pyright: ignore[reportOptionalMemberAccess]
-                "aspect": "auto",
+                "color": plt.rcParams["axes.prop_cycle"].by_key()["color"][i * 2]  # pyright: ignore[reportOptionalMemberAccess]
             }
         }
     else:
@@ -1409,8 +1409,8 @@ def _arrange_grid(
                         if callable(lower_f):
                             lower_f(
                                 ax,
-                                sample[:, row],
                                 sample[:, col],
+                                sample[:, row],
                                 limits[row],
                                 limits[col],
                                 lower_kwargs[sample_ind],
@@ -1510,13 +1510,13 @@ def _sbc_rank_plot(
     line_alpha: float = 0.8,
     show_uniform_region: bool = True,
     uniform_region_alpha: float = 0.3,
+    uniform_region_color: str = "gray",
     xlim_offset_factor: float = 0.1,
     num_cols: int = 4,
     params_in_subplots: bool = False,
     show_ylabel: bool = False,
     sharey: bool = False,
     fig: Optional[FigureBase] = None,
-    legend_kwargs: Optional[Dict] = None,
     ax=None,  # no type hint to avoid hassle with pyright. Should be `array(Axes).`
     figsize: Optional[tuple] = None,
 ) -> Tuple[Figure, Axes]:
@@ -1562,15 +1562,12 @@ def _sbc_rank_plot(
     for idx, rank in enumerate(ranks_list):
         assert isinstance(rank, (Tensor, np.ndarray))
         if isinstance(rank, Tensor):
-            ranks_list[idx]: np.ndarray = rank.numpy()  # type: ignore
+            ranks_list[idx] = rank.numpy()
 
     plot_types = ["hist", "cdf"]
     assert (
         plot_type in plot_types
     ), "plot type {plot_type} not implemented, use one in {plot_types}."
-
-    if legend_kwargs is None:
-        legend_kwargs = dict(loc="best", handlelength=0.8)
 
     num_sbc_runs, num_parameters = ranks_list[0].shape
     num_ranks = len(ranks_list)
@@ -1630,6 +1627,7 @@ def _sbc_rank_plot(
                         xlabel=f"posterior ranks {parameter_labels[jj]}",
                         # Show legend and ylabel only in first subplot.
                         show_ylabel=jj == 0,
+                        show_legend=jj == 0,
                         alpha=line_alpha,
                     )
                     if ii == 0 and show_uniform_region:
@@ -1649,6 +1647,7 @@ def _sbc_rank_plot(
                         xlabel=f"posterior rank {parameter_labels[jj]}",
                         # Show legend and ylabel only in first subplot.
                         show_ylabel=show_ylabel,
+                        show_legend=jj == 0,
                         alpha=line_alpha,
                         xlim_offset_factor=xlim_offset_factor,
                     )
@@ -1659,10 +1658,6 @@ def _sbc_rank_plot(
                         num_posterior_samples,
                         alpha=uniform_region_alpha,
                     )
-                    # show legend only in first subplot.
-                    if jj == 0 and ranks_labels[ii] is not None:
-                        plt.legend(**legend_kwargs)
-
                 else:
                     raise ValueError(
                         f"plot_type {plot_type} not defined, use one in {plot_types}"
@@ -1690,6 +1685,7 @@ def _sbc_rank_plot(
                 xlabel="posterior rank",
                 # Plot ylabel and legend at last.
                 show_ylabel=jj == (num_parameters - 1),
+                show_legend=jj == (num_parameters - 1),
                 alpha=line_alpha,
             )
         if show_uniform_region:
@@ -1699,8 +1695,6 @@ def _sbc_rank_plot(
                 num_repeats,
                 alpha=uniform_region_alpha,
             )
-        # show legend on the last subplot.
-        plt.legend(**legend_kwargs)
 
     return fig, ax  # pyright: ignore[reportReturnType]
 
@@ -1714,8 +1708,10 @@ def _plot_ranks_as_hist(
     color: str = "firebrick",
     alpha: float = 0.8,
     show_ylabel: bool = False,
+    show_legend: bool = False,
     num_ticks: int = 3,
     xlim_offset_factor: float = 0.1,
+    legend_kwargs: Optional[Dict] = None,
 ) -> None:
     """Plot ranks as histograms on the current axis.
 
@@ -1747,6 +1743,8 @@ def _plot_ranks_as_hist(
         plt.ylabel("counts")
     else:
         plt.yticks([])
+    if show_legend and ranks_label:
+        plt.legend(loc=1, handlelength=0.8, **legend_kwargs or {})
 
     plt.xlim(-xlim_offset, num_posterior_samples + xlim_offset)
     plt.xticks(np.linspace(0, num_posterior_samples, num_ticks))
@@ -1762,7 +1760,9 @@ def _plot_ranks_as_cdf(
     color: Optional[str] = None,
     alpha: float = 0.8,
     show_ylabel: bool = True,
+    show_legend: bool = False,
     num_ticks: int = 3,
+    legend_kwargs: Optional[Dict] = None,
 ) -> None:
     """Plot ranks as empirical CDFs on the current axis.
 
@@ -1800,6 +1800,8 @@ def _plot_ranks_as_cdf(
     else:
         # Plot ticks only
         plt.yticks(np.linspace(0, 1, 3), [])
+    if show_legend and ranks_label:
+        plt.legend(loc=2, handlelength=0.8, **legend_kwargs or {})
 
     plt.ylim(0, 1)
     plt.xlim(0, num_bins)
@@ -1833,7 +1835,6 @@ def _plot_cdf_region_expected_under_uniformity(
         y2=np.repeat(upper / np.max(upper), num_repeats),  # pyright: ignore[reportArgumentType]
         color=color,
         alpha=alpha,
-        label="expected under uniformity",
     )
 
 
@@ -1856,7 +1857,6 @@ def _plot_hist_region_expected_under_uniformity(
         y2=np.repeat(upper, num_bins),  # pyright: ignore[reportArgumentType]
         color=color,
         alpha=alpha,
-        label="expected under uniformity",
     )
 
 
@@ -1996,7 +1996,7 @@ def marginal_plot_with_probs_intensity(
         weights = np.array([np.mean(w) for w in weights])
         # remove empty bins
         id = list(set(range(n_bins)) - set(probs_per_marginal["bins"]))
-        patches = np.delete(np.array(patches), id)
+        patches = np.delete(patches, id)
         bins = np.delete(bins, id)
 
         # normalize color intensity
@@ -2092,43 +2092,6 @@ def pp_plot_lc2st(
         conf_alpha=conf_alpha,
         **kwargs,
     )
-
-
-def plot_tarp(
-    ecp: Tensor, alpha: Tensor, title: Optional[str] = None
-) -> Tuple[Figure, Axes]:
-    """
-    Plots the expected coverage probability (ECP) against the credibility
-    level,alpha, for a given alpha grid.
-
-    Args:
-        ecp : numpy.ndarray
-            Array of expected coverage probabilities.
-        alpha : numpy.ndarray
-            Array of credibility levels.
-        title : str, optional
-            Title for the plot. The default is "".
-
-     Returns
-        fig : matplotlib.figure.Figure
-            The figure object.
-        ax : matplotlib.axes.Axes
-            The axes object.
-
-    """
-
-    fig = plt.figure(figsize=(6, 6))
-    ax: Axes = plt.gca()
-
-    ax.plot(alpha, ecp, color="blue", label="TARP")
-    ax.plot(alpha, alpha, color="black", linestyle="--", label="ideal")
-    ax.set_xlabel(r"Credibility Level $\alpha$")
-    ax.set_ylabel(r"Expected Coverage Probility")
-    ax.set_xlim(0.0, 1.0)
-    ax.set_ylim(0.0, 1.0)
-    ax.set_title(title or "")
-    ax.legend()
-    return fig, ax  # type: ignore
 
 
 # TO BE DEPRECATED
@@ -2663,8 +2626,8 @@ def _arrange_plots(
 
 def _get_default_opts():
     warn(
-        "_get_default_opts will be deprecated, use _get_default_fig_kwargs,"
-        "get_default_diag_kwargs, get_default_offdiag_kwargs instead",
+        "_get_default_opts will be deprecated, use _get_default_fig_kwargs,\
+              get_default_diag_kwargs, get_default_offdiag_kwargs instead",
         PendingDeprecationWarning,
         stacklevel=2,
     )

@@ -12,7 +12,7 @@ from torch import Tensor, float32, nn
 from torch.distributions import Distribution, Uniform
 
 from sbi.sbi_types import Array
-from sbi.utils.sbiutils import warn_on_batched_x, within_support
+from sbi.utils.sbiutils import warn_on_iid_x, within_support
 from sbi.utils.torchutils import BoxUniform, atleast_2d
 from sbi.utils.user_input_checks_utils import (
     CustomPriorWrapper,
@@ -71,9 +71,9 @@ def process_prior(
     # If prior is a sequence, assume independent components and check as PyTorch prior.
     if isinstance(prior, Sequence):
         warnings.warn(
-            f"Prior was provided as a sequence of {len(prior)} priors. They will be "
-            "interpreted as independent of each other and matched in order to the "
-            "components of the parameter.",
+            f"""Prior was provided as a sequence of {len(prior)} priors. They will be
+            interpreted as independent of each other and matched in order to the
+            components of the parameter.""",
             stacklevel=2,
         )
         # process individual priors
@@ -551,7 +551,9 @@ def get_batch_loop_simulator(simulator: Callable) -> Callable:
     return batch_loop_simulator
 
 
-def process_x(x: Array, x_event_shape: Optional[torch.Size] = None) -> Tensor:
+def process_x(
+    x: Array, x_event_shape: Optional[torch.Size] = None, allow_iid_x: bool = False
+) -> Tensor:
     """Return observed data adapted to match sbi's shape and type requirements.
 
     This means that `x` is returned with a `batch_dim`.
@@ -563,6 +565,7 @@ def process_x(x: Array, x_event_shape: Optional[torch.Size] = None) -> Tensor:
         x_event_shape: Prescribed shape - either directly provided by the user at init
             or inferred by sbi by running a simulation and checking the output. Does not
             contain a batch dimension.
+        allow_iid_x: Whether multiple trials in x are allowed.
 
     Returns:
         x: Observed data with shape ready for usage in sbi.
@@ -582,7 +585,10 @@ def process_x(x: Array, x_event_shape: Optional[torch.Size] = None) -> Tensor:
         x = x.unsqueeze(0)
 
     input_x_shape = x.shape
-    warn_on_batched_x(batch_size=input_x_shape[0])
+    if not allow_iid_x:
+        check_for_possibly_batched_x_shape(input_x_shape)
+    else:
+        warn_on_iid_x(num_trials=input_x_shape[0])
 
     if x_event_shape is not None:
         # Number of trials can change for every new x, but single trial x shape must
@@ -715,7 +721,7 @@ def validate_theta_and_x(
     assert theta.dtype == float32, "Type of parameters must be float32."
     assert x.dtype == float32, "Type of simulator outputs must be float32."
 
-    if str(x.device) != str(data_device):
+    if str(x.device) != data_device:
         warnings.warn(
             f"Data x has device '{x.device}'. "
             f"Moving x to the data_device '{data_device}'. "
@@ -724,7 +730,7 @@ def validate_theta_and_x(
         )
         x = x.to(data_device)
 
-    if str(theta.device) != str(data_device):
+    if str(theta.device) != data_device:
         warnings.warn(
             f"Parameters theta has device '{theta.device}'. "
             f"Moving theta to the data_device '{data_device}'. "
@@ -748,11 +754,7 @@ def test_posterior_net_for_multi_d_x(net, theta: Tensor, x: Tensor) -> None:
     """
     try:
         # torch.nn.functional needs at least two inputs here.
-        if hasattr(net, "log_prob"):
-            # This only is checked for density estimators, not for classifiers and
-            # others
-            net.log_prob(theta[:, :2], condition=x[:2])
-
+        net.log_prob(theta[:, :2], condition=x[:2])
     except RuntimeError as rte:
         ndims = x.ndim
         if ndims > 2:

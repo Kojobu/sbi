@@ -18,54 +18,47 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Mathematics",
-    """License :: OSI Approved :: Apache Software License""",
+    """License :: OSI Approved :: Apache License, Version 2.0 (Apache-2.0""",
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Development Status :: 3 - Alpha",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 dynamic = ["version"]
 readme = "README.md"
 keywords = ["Bayesian inference", "simulation-based inference", "PyTorch"]
 dependencies = [
     "arviz",
     "joblib>=1.0.0",
-    "jupyter",
     "matplotlib",
-    "numpy<2.0.0",
+    "numpy",
     "pillow",
-    "pyknos>=0.16.0",
+    "pyknos>=0.15.1",
     "pyro-ppl>=1.3.1",
     "scikit-learn",
-    "scipy<1.13",
+    "scipy",
     "tensorboard",
-    "torch>=1.13.0",
+    "torch>=1.8.0",
     "tqdm",
     "pymc>=5.0.0",
     "zuko>=1.2.0",
 ]
 
 [project.optional-dependencies]
-doc = [
+dev = [
     # Documentation
-    "jupyter_contrib_nbextensions",
-    "notebook <= 6.4.12",
-    "traitlets <= 5.9.0",
-    "ipython <= 8.9.0",
     "mkdocs",
     "mkdocs-material",
     "markdown-include",
     "mkdocs-redirects",
     "mkdocstrings[python] >= 0.18",
-    "mike"
-]
-dev = [
-    "ffmpeg",
+    "jupyter",
+    "nbconvert",
     # Lint
     "pre-commit == 3.5.0",
     "pyyaml",
-    "pyright",
+    "pyright == 1.1.355",
     "ruff>=0.3.3",
     # Test
     "pytest",
@@ -110,7 +103,7 @@ ignore = [
 case-sensitive = true
 lines-between-types = 0  # like isort default.
 relative-imports-order = "furthest-to-closest"  # like isort default.
-known-first-party = ["sbi", "tests", "tutorials"]
+known-first-party = ["sbi", "tests", "examples", "tutorials"]
 
 [tool.ruff.format]
 exclude = ["*.ipynb"]
@@ -135,9 +128,9 @@ xfail_strict = true
 
 # Pyright configuration
 [tool.pyright]
-include = ["sbi"]
-exclude = ["**/__pycache__", "**/__node_modules__", ".git", "docs", "tutorials", "tests"]
-python_version = "3.9"
+include = ["sbi", "tests"]
+exclude = ["**/__pycache__", "**/__node_modules__", ".git", "docs", "examples", "tutorials", "tests"]
+python_version = "3.8"
 reportUnsupportedDunderAll = false
 reportGeneralTypeIssues = false
 reportInvalidTypeForm = false
